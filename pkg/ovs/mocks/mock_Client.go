@@ -22,6 +22,62 @@ func (_m *MockClient) EXPECT() *MockClient_Expecter {
 	return &MockClient_Expecter{mock: &_m.Mock}
 }
 
+// BridgeExists provides a mock function with given fields: name
+func (_m *MockClient) BridgeExists(name string) (bool, error) {
+	ret := _m.Called(name)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BridgeExists")
+	}
+
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(string) (bool, error)); ok {
+		return rf(name)
+	}
+	if rf, ok := ret.Get(0).(func(string) bool); ok {
+		r0 = rf(name)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	if rf, ok := ret.Get(1).(func(string) error); ok {
+		r1 = rf(name)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockClient_BridgeExists_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BridgeExists'
+type MockClient_BridgeExists_Call struct {
+	*mock.Call
+}
+
+// BridgeExists is a helper method to define mock.On call
+//   - name string
+func (_e *MockClient_Expecter) BridgeExists(name interface{}) *MockClient_BridgeExists_Call {
+	return &MockClient_BridgeExists_Call{Call: _e.mock.On("BridgeExists", name)}
+}
+
+func (_c *MockClient_BridgeExists_Call) Run(run func(name string)) *MockClient_BridgeExists_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(string))
+	})
+	return _c
+}
+
+func (_c *MockClient_BridgeExists_Call) Return(_a0 bool, _a1 error) *MockClient_BridgeExists_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockClient_BridgeExists_Call) RunAndReturn(run func(string) (bool, error)) *MockClient_BridgeExists_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Close provides a mock function with no fields
 func (_m *MockClient) Close() {
 	_m.Called()
@@ -194,6 +250,39 @@ func (_c *MockClient_DeletePort_Call) Return(_a0 error) *MockClient_DeletePort_C
 
 func (_c *MockClient_DeletePort_Call) RunAndReturn(run func(context.Context, string, string) error) *MockClient_DeletePort_Call {
 	_c.Call.Return(run)
+	return _c
+}
+
+// SetBridgeNotifier provides a mock function with given fields: fn
+func (_m *MockClient) SetBridgeNotifier(fn func(ovs.BridgeEvent)) {
+	_m.Called(fn)
+}
+
+// MockClient_SetBridgeNotifier_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetBridgeNotifier'
+type MockClient_SetBridgeNotifier_Call struct {
+	*mock.Call
+}
+
+// SetBridgeNotifier is a helper method to define mock.On call
+//   - fn func(ovs.BridgeEvent)
+func (_e *MockClient_Expecter) SetBridgeNotifier(fn interface{}) *MockClient_SetBridgeNotifier_Call {
+	return &MockClient_SetBridgeNotifier_Call{Call: _e.mock.On("SetBridgeNotifier", fn)}
+}
+
+func (_c *MockClient_SetBridgeNotifier_Call) Run(run func(fn func(ovs.BridgeEvent))) *MockClient_SetBridgeNotifier_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(func(ovs.BridgeEvent)))
+	})
+	return _c
+}
+
+func (_c *MockClient_SetBridgeNotifier_Call) Return() *MockClient_SetBridgeNotifier_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockClient_SetBridgeNotifier_Call) RunAndReturn(run func(func(ovs.BridgeEvent))) *MockClient_SetBridgeNotifier_Call {
+	_c.Run(run)
 	return _c
 }
 
