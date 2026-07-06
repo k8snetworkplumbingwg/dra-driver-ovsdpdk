@@ -78,6 +78,54 @@ func (_c *MockClient_BridgeExists_Call) RunAndReturn(run func(string) (bool, err
 	return _c
 }
 
+// BridgeNUMANodes provides a mock function with given fields: bridgeName
+func (_m *MockClient) BridgeNUMANodes(bridgeName string) []int {
+	ret := _m.Called(bridgeName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BridgeNUMANodes")
+	}
+
+	var r0 []int
+	if rf, ok := ret.Get(0).(func(string) []int); ok {
+		r0 = rf(bridgeName)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]int)
+		}
+	}
+
+	return r0
+}
+
+// MockClient_BridgeNUMANodes_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BridgeNUMANodes'
+type MockClient_BridgeNUMANodes_Call struct {
+	*mock.Call
+}
+
+// BridgeNUMANodes is a helper method to define mock.On call
+//   - bridgeName string
+func (_e *MockClient_Expecter) BridgeNUMANodes(bridgeName interface{}) *MockClient_BridgeNUMANodes_Call {
+	return &MockClient_BridgeNUMANodes_Call{Call: _e.mock.On("BridgeNUMANodes", bridgeName)}
+}
+
+func (_c *MockClient_BridgeNUMANodes_Call) Run(run func(bridgeName string)) *MockClient_BridgeNUMANodes_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(string))
+	})
+	return _c
+}
+
+func (_c *MockClient_BridgeNUMANodes_Call) Return(_a0 []int) *MockClient_BridgeNUMANodes_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockClient_BridgeNUMANodes_Call) RunAndReturn(run func(string) []int) *MockClient_BridgeNUMANodes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Close provides a mock function with no fields
 func (_m *MockClient) Close() {
 	_m.Called()

@@ -62,3 +62,11 @@ type Interface struct {
 	Type    string            `ovsdb:"type"`
 	Options map[string]string `ovsdb:"options"`
 }
+
+// ifaceEvent is an internal notification for a dpdk interface add or delete.
+type ifaceEvent struct {
+	uuid    string
+	name    string
+	devargs string // options["dpdk-devargs"], empty on delete
+	added   bool
+}

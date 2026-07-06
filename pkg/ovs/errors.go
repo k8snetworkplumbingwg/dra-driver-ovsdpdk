@@ -20,3 +20,6 @@ import "errors"
 
 // ErrPortNotFound is returned when the named OVS port does not exist in OVSDB.
 var ErrPortNotFound = errors.New("port not found")
+
+// ErrBridgeNotFound is returned when the named OVS bridge does not exist in OVSDB.
+var ErrBridgeNotFound = errors.New("bridge not found")

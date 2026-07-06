@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -29,6 +30,8 @@ import (
 	"github.com/ovn-kubernetes/libovsdb/model"
 	"github.com/ovn-kubernetes/libovsdb/ovsdb"
 	"k8s.io/klog/v2"
+
+	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/pci"
 )
 
 const (
@@ -63,13 +66,22 @@ type Client interface {
 
 	// BridgeExists returns true if the bridge is present in OVS.
 	BridgeExists(name string) (bool, error)
+
+	// BridgeNUMANodes return the deduplicated list of NUMA nodes from bridge uplinks.
+	BridgeNUMANodes(bridgeName string) []int
 }
 
 // ovsClient wraps the libovsdb client for interacting with OVSDB.
 type ovsClient struct {
-	client         client.Client
-	log            klog.Logger
+	client client.Client
+	log    klog.Logger
+
+	notifierMu     sync.RWMutex
 	bridgeNotifier func(BridgeEvent)
+
+	numaMu  sync.RWMutex
+	numaMap map[string]map[string]int // bridgeName → ifaceUUID → numaNode
+	ifaceCh chan ifaceEvent
 }
 
 // New creates an ovsClient and blocks until the initial OVSDB connection
@@ -117,9 +129,14 @@ func New(ctx context.Context, runDir string) (*ovsClient, error) {
 	log.Info("OVSDB connection established", "endpoint", endpoint)
 
 	c := &ovsClient{
-		client: ovs,
-		log:    log,
+		client:  ovs,
+		log:     log,
+		numaMap: make(map[string]map[string]int),
+		ifaceCh: make(chan ifaceEvent, 16),
 	}
+
+	// Start consuming interface events before the monitor emits initial state.
+	go c.processInterfaceEvents(ctx)
 
 	if err := c.startMonitor(ctx); err != nil {
 		ovs.Disconnect()
@@ -129,40 +146,69 @@ func New(ctx context.Context, runDir string) (*ovsClient, error) {
 	return c, nil
 }
 
-// startMonitor registers a cache event handler for bridge add/delete events
-// and starts a conditional OVSDB monitor that tracks only Bridge rows with
-// datapath_type == "netdev" (DPDK bridges).
+// startMonitor registers cache event handlers for Bridge and Interface events,
+// then starts a conditional OVSDB monitor that tracks:
+//   - Bridge rows with datapath_type == "netdev" (DPDK bridges)
+//   - Interface rows with type == "dpdk" (physical DPDK uplinks)
 func (c *ovsClient) startMonitor(ctx context.Context) error {
 	c.client.Cache().AddEventHandler(&cache.EventHandlerFuncs{
 		AddFunc: func(table string, m model.Model) {
-			if table != "Bridge" {
-				return
-			}
-			br, ok := m.(*Bridge)
-			if !ok {
-				return
-			}
-			c.log.V(2).Info("Bridge added", "name", br.Name, "datapathType", br.DatapathType)
-			if c.bridgeNotifier != nil {
-				c.bridgeNotifier(BridgeEvent{Name: br.Name, Type: BridgeAdded})
+			switch table {
+			case "Bridge":
+				br, ok := m.(*Bridge)
+				if !ok {
+					return
+				}
+				c.log.V(2).Info("Bridge added", "name", br.Name, "datapathType", br.DatapathType)
+				if fn := c.getBridgeNotifier(); fn != nil {
+					fn(BridgeEvent{Name: br.Name, Type: BridgeAdded})
+				}
+			case "Interface":
+				iface, ok := m.(*Interface)
+				if !ok {
+					return
+				}
+				devargs := iface.Options["dpdk-devargs"]
+				c.log.V(2).Info("DPDK interface added", "name", iface.Name, "uuid", iface.UUID, "devargs", devargs)
+				select {
+				case c.ifaceCh <- ifaceEvent{uuid: iface.UUID, name: iface.Name, devargs: devargs, added: true}:
+				default:
+					c.log.V(2).Info("ifaceCh full, dropping add event", "interface", iface.Name)
+				}
 			}
 		},
 		DeleteFunc: func(table string, m model.Model) {
-			if table != "Bridge" {
-				return
-			}
-			br, ok := m.(*Bridge)
-			if !ok {
-				return
-			}
-			c.log.V(2).Info("Bridge deleted", "name", br.Name)
-			if c.bridgeNotifier != nil {
-				c.bridgeNotifier(BridgeEvent{Name: br.Name, Type: BridgeDeleted})
+			switch table {
+			case "Bridge":
+				br, ok := m.(*Bridge)
+				if !ok {
+					return
+				}
+				c.log.V(2).Info("Bridge deleted", "name", br.Name)
+				if fn := c.getBridgeNotifier(); fn != nil {
+					fn(BridgeEvent{Name: br.Name, Type: BridgeDeleted})
+				}
+				// Clean up any NUMA entries for this bridge.
+				c.numaMu.Lock()
+				delete(c.numaMap, br.Name)
+				c.numaMu.Unlock()
+			case "Interface":
+				iface, ok := m.(*Interface)
+				if !ok {
+					return
+				}
+				c.log.V(2).Info("DPDK interface deleted", "name", iface.Name, "uuid", iface.UUID)
+				select {
+				case c.ifaceCh <- ifaceEvent{uuid: iface.UUID, name: iface.Name, added: false}:
+				default:
+					c.log.V(2).Info("ifaceCh full, dropping delete event", "interface", iface.Name)
+				}
 			}
 		},
 	})
 
 	bridgeProto := &Bridge{}
+	ifaceProto := &Interface{}
 	monitor := c.client.NewMonitor(
 		// Only monitor bridges with datapath_type == "netdev" (DPDK bridges).
 		client.WithConditionalTable(bridgeProto, []model.Condition{{
@@ -170,9 +216,15 @@ func (c *ovsClient) startMonitor(ctx context.Context) error {
 			Function: ovsdb.ConditionEqual,
 			Value:    "netdev",
 		}}),
+		// Only monitor interfaces with type == "dpdk" (physical DPDK uplinks).
+		client.WithConditionalTable(ifaceProto, []model.Condition{{
+			Field:    &ifaceProto.Type,
+			Function: ovsdb.ConditionEqual,
+			Value:    "dpdk",
+		}}),
 	)
 	if _, err := c.client.Monitor(ctx, monitor); err != nil {
-		return fmt.Errorf("monitor Bridge table: %w", err)
+		return fmt.Errorf("monitor Bridge/Interface tables: %w", err)
 	}
 	return nil
 }
@@ -193,7 +245,123 @@ func (c *ovsClient) Close() {
 //
 // The callback runs on the libovsdb cache goroutine, so it must not block.
 func (c *ovsClient) SetBridgeNotifier(fn func(BridgeEvent)) {
+	c.notifierMu.Lock()
+	defer c.notifierMu.Unlock()
 	c.bridgeNotifier = fn
+}
+
+// getBridgeNotifier returns the current bridge notifier callback.
+func (c *ovsClient) getBridgeNotifier() func(BridgeEvent) {
+	c.notifierMu.RLock()
+	defer c.notifierMu.RUnlock()
+	return c.bridgeNotifier
+}
+
+// processInterfaceEvents is a background goroutine that reads ifaceEvents and
+// updates the numaMap accordingly.
+func (c *ovsClient) processInterfaceEvents(ctx context.Context) {
+	for {
+		select {
+		case ev := <-c.ifaceCh:
+			if ev.added {
+				c.handleInterfaceAdd(ctx, ev)
+			} else {
+				c.handleInterfaceDelete(ev)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// handleInterfaceAdd resolves the bridge and NUMA node for a newly added dpdk
+// interface and stores the result in numaMap.
+func (c *ovsClient) handleInterfaceAdd(ctx context.Context, ev ifaceEvent) {
+	pciAddr, err := pci.ParseDevargs(ev.devargs)
+	if err != nil {
+		c.log.Error(err, "Failed NUMA resolution", "interface", ev.name, "devargs", ev.devargs)
+		return
+	}
+
+	numaNode, err := pci.NodeForPCIAddr(pciAddr)
+	if err != nil {
+		c.log.Error(err, "Failed to read NUMA node for DPDK interface",
+			"interface", ev.name, "pciAddr", pciAddr)
+		return
+	}
+
+	port, err := c.findPortWithIface(ctx, ev.uuid)
+	if err != nil {
+		c.log.Error(err, "Failed to find Port with Interface", "interface", ev.name)
+		return
+	}
+
+	bridge, err := c.findBridgeWithPort(ctx, port)
+	if err != nil {
+		c.log.Error(err, "Failed to find Bridge with Port", "port", port.Name)
+		return
+	}
+
+	// Store the bridge->Numa.
+	c.numaMu.Lock()
+	if c.numaMap[bridge.Name] == nil {
+		c.numaMap[bridge.Name] = make(map[string]int)
+	}
+	c.numaMap[bridge.Name][ev.uuid] = numaNode
+	c.numaMu.Unlock()
+
+	c.log.V(2).Info("Resolved DPDK interface NUMA node",
+		"interface", ev.name, "bridge", bridge.Name, "numaNode", numaNode)
+}
+
+// handleInterfaceDelete removes a deleted dpdk interface from numaMap.
+func (c *ovsClient) handleInterfaceDelete(ev ifaceEvent) {
+	var foundBridge string
+
+	c.numaMu.Lock()
+	for bridgeName, ifaces := range c.numaMap {
+		if _, ok := ifaces[ev.uuid]; ok {
+			delete(ifaces, ev.uuid)
+			if len(ifaces) == 0 {
+				delete(c.numaMap, bridgeName)
+			}
+			foundBridge = bridgeName
+			break
+		}
+	}
+	c.numaMu.Unlock()
+
+	if foundBridge == "" {
+		return
+	}
+
+	c.log.V(2).Info("Removed DPDK interface from NUMA map",
+		"interface", ev.name, "bridge", foundBridge)
+}
+
+// BridgeNUMANodes returns the deduplicated set of NUMA nodes for the DPDK
+// uplink interfaces attached to the named bridge, as resolved from sysfs.
+//
+// Returns nil if no DPDK interface information is available yet for
+// the bridge (e.g. the monitor has not yet observed any dpdk interfaces on it).
+func (c *ovsClient) BridgeNUMANodes(bridgeName string) []int {
+	c.numaMu.RLock()
+	defer c.numaMu.RUnlock()
+
+	ifaces, ok := c.numaMap[bridgeName]
+	if !ok || len(ifaces) == 0 {
+		return nil
+	}
+
+	seen := make(map[int]struct{})
+	var nodes []int
+	for _, node := range ifaces {
+		if _, dup := seen[node]; !dup {
+			seen[node] = struct{}{}
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes
 }
 
 // BridgeExists reports whether a bridge with the given name currently exists
@@ -311,6 +479,69 @@ func (c *ovsClient) findPortUUID(ctx context.Context, portName string) (string, 
 		return "", nil
 	}
 	return ports[0].UUID, nil
+}
+
+// findBridgeWithPort looks for the Bridge that contains a port.
+func (c *ovsClient) findBridgeWithPort(ctx context.Context, port *Port) (*Bridge, error) {
+	if port == nil {
+		return nil, ErrBridgeNotFound
+	}
+
+	// Bridges are monitored, look in cache.
+	var bridges []*Bridge
+	b := &Bridge{}
+
+	err := c.client.WhereAll(b,
+		model.Condition{
+			Field:    &b.Ports,
+			Function: ovsdb.ConditionIncludes,
+			Value:    []string{port.UUID},
+		},
+	).List(ctx, &bridges)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(bridges) == 0 {
+		return nil, ErrBridgeNotFound
+	}
+	if len(bridges) > 1 {
+		return nil, fmt.Errorf("more than one bridge with port %s", port.Name)
+	}
+	return bridges[0], nil
+}
+
+// findPortWithIface looks for the Port that contains an interface.
+func (c *ovsClient) findPortWithIface(ctx context.Context, ifaceUUID string) (*Port, error) {
+	// Ports are not monitored, send query to the database.
+	var ports []*Port
+	port := &Port{}
+
+	ops, err := c.client.WhereAll(port, model.Condition{
+		Field:    &port.Interfaces,
+		Function: ovsdb.ConditionIncludes,
+		Value:    []string{ifaceUUID},
+	}).Select(port)
+	if err != nil {
+		return nil, fmt.Errorf("build select for port with interface %q: %w", ifaceUUID, err)
+	}
+
+	results, err := c.client.Transact(ctx, ops...)
+	if err != nil {
+		return nil, fmt.Errorf("select port with interface %q: %w", ifaceUUID, err)
+	}
+	if err := c.client.GetSelectResults(ops, results, &ports); err != nil {
+		return nil, fmt.Errorf("parse select results for port with interface %q: %w", ifaceUUID, err)
+	}
+
+	if len(ports) == 0 {
+		return nil, ErrPortNotFound
+	}
+	if len(ports) > 1 {
+		return nil, fmt.Errorf("more than one port with interface %q", ifaceUUID)
+	}
+
+	return ports[0], nil
 }
 
 // joinOpErrors converts a slice of ovsdb.OperationError to a single error
