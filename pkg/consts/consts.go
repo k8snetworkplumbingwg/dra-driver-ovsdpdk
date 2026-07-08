@@ -29,6 +29,14 @@ const (
 	// DefaultBridgeCapacity is the default number of allocatable devices (ports) per bridge.
 	DefaultBridgeCapacity = 32 * 1024
 
+	// DefaultTopologyDeviceCount is the number of fake devices exposed by the
+	// topology Device Plugin for each bridge.
+	DefaultTopologyDeviceCount = 1024
+
+	// TopologyResourcePrefix is the prefix for topology Device Plugin resource names.
+	// The full resource name is TopologyResourcePrefix + user-provided suffix.
+	TopologyResourcePrefix = DriverName + "/"
+
 	// VhostSocketFilename is the name of the vhost-user socket file.
 	VhostSocketFilename = "vhost.sock"
 
