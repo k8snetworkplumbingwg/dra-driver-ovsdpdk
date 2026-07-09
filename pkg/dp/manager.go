@@ -27,6 +27,12 @@ import (
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/ovs"
 )
 
+// newServerFunc is the factory used by the Manager to create topology DP servers.
+// Overridden in tests to return mocks.
+var newServerFunc = func(resourceName string, numaNode, deviceCount int) TopologyDPServer {
+	return newServer(resourceName, numaNode, deviceCount)
+}
+
 // Manager manages the lifecycle of topology Device Plugin servers.
 // Manager reacts to two events:
 // - Calls to UpdateResources(), called when bridge information is changed in the API.
@@ -34,8 +40,8 @@ import (
 // bridges
 type Manager struct {
 	mutex     sync.Mutex
-	topology  map[string]string  // bridgeName → topologyResource
-	servers   map[string]*Server // bridgeName → running Server
+	topology  map[string]string           // bridgeName → topologyResource
+	servers   map[string]TopologyDPServer // bridgeName → running server
 	ovsClient ovs.Client
 	ctx       context.Context
 	log       klog.Logger
@@ -45,7 +51,7 @@ type Manager struct {
 func NewManager(ctx context.Context, ovsClient ovs.Client) *Manager {
 	m := &Manager{
 		topology:  make(map[string]string),
-		servers:   make(map[string]*Server),
+		servers:   make(map[string]TopologyDPServer),
 		ovsClient: ovsClient,
 		ctx:       ctx,
 		log:       klog.Background().WithName("dp.Manager"),
@@ -120,7 +126,7 @@ func (m *Manager) ensureServer(bridgeName, resourceName string) {
 
 	if srv, exists := m.servers[bridgeName]; exists {
 		// Correct NUMA, nothing to do.
-		if srv.numaNode == numaNode {
+		if srv.GetNUMA() == numaNode {
 			return
 		}
 		// NUMA changed, stop old server.
@@ -133,7 +139,7 @@ func (m *Manager) ensureServer(bridgeName, resourceName string) {
 	// Start a new server.
 	logger.Info("Starting topology Device Plugin",
 		"bridge", bridgeName, "resource", resourceName, "numaNode", numaNode)
-	srv := newServer(resourceName, numaNode, consts.DefaultTopologyDeviceCount)
+	srv := newServerFunc(resourceName, numaNode, consts.DefaultTopologyDeviceCount)
 	if err := srv.start(m.ctx); err != nil {
 		logger.Error(err, "Failed to start topology Device Plugin",
 			"bridge", bridgeName, "resource", resourceName)

@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-// Package dp implements a Kubernetes Device Plugin that exposes NUMA topology
-// information for OVS DPDK bridges. The devices carry only TopologyInfo;
-// Allocate returns empty responses (no mounts, no env, no device specs).
 package dp
 
 import (
@@ -32,6 +29,13 @@ import (
 	"k8s.io/klog/v2"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
+
+// TopologyDPServer represents a Topology Device Plugin.
+type TopologyDPServer interface {
+	start(ctx context.Context) error
+	stop()
+	GetNUMA() int
+}
 
 // Server is a Device Plugin gRPC server that exposes a fixed set of fake
 // devices carrying NUMA topology information for a single OVS bridge.
@@ -148,6 +152,11 @@ func (s *Server) devices() []*pluginapi.Device {
 }
 
 // GetDevicePluginOptions implements DevicePluginServer.
+// GetNUMA returns the NUMA node this server is advertising.
+func (s *Server) GetNUMA() int {
+	return s.numaNode
+}
+
 func (s *Server) GetDevicePluginOptions(_ context.Context, _ *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
 	return &pluginapi.DevicePluginOptions{}, nil
 }
