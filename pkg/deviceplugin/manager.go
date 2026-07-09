@@ -36,6 +36,7 @@ type ResourceUpdater interface {
 }
 
 // newServerFunc is the factory used by the Manager to create topology DP servers.
+// Overridden in tests to return mocks.
 var newServerFunc = func(resourceName string, numaNode, deviceCount int) TopologyDPServer {
 	return newServer(resourceName, numaNode, deviceCount)
 }

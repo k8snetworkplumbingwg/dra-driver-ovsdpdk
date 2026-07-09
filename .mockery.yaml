@@ -21,3 +21,9 @@ packages:
       outpkg: "mocks"
     interfaces:
       DeviceStateIface:
+  github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/deviceplugin:
+    config:
+      dir: "pkg/deviceplugin/mocks"
+      outpkg: "mocks"
+    interfaces:
+      TopologyDPServer:
