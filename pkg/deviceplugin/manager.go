@@ -63,6 +63,7 @@ func NewManager(ctx context.Context, ovsClient ovs.Client) *Manager {
 		ctx:       ctx,
 		log:       klog.Background().WithName("dp.Manager"),
 	}
+	ovsClient.SetInterfaceNotifier(m.OnInterfaceChange)
 	return m
 }
 
@@ -103,6 +104,22 @@ func (m *Manager) UpdateResources(ctx context.Context, bridges []ovsdpdkdrav1alp
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// OnInterfaceChange re-evaluates the Device Plugin server when a DPDK interface
+// is added or removed from the bridge.
+func (m *Manager) OnInterfaceChange(bridgeName string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	resourceName, wanted := m.topology[bridgeName]
+	if !wanted {
+		// Bridge not configured for topology; ignore interface changes.
+		return
+	}
+	if err := m.ensureServer(bridgeName, resourceName); err != nil {
+		m.log.Error(err, "Failed to ensure server on interface change", "bridge", bridgeName)
+	}
 }
 
 // ensureServer ensures the Device Plugin server for the given bridge is in the
