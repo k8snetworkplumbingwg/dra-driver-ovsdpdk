@@ -16,6 +16,12 @@
 
 package consts
 
+import (
+	"time"
+
+	"k8s.io/apimachinery/pkg/util/wait"
+)
+
 const (
 	// DriverName is the name of the DRA driver as registered with Kubernetes.
 	DriverName = "ovsdpdk.k8snetworkplumbingwg.io"
@@ -42,3 +48,12 @@ const (
 	// DefaultContainerRootPath is the default vhost-user container base path.
 	DefaultContainerRootPath = "/var/run/ovsdpdk"
 )
+
+// Backoff is the retry configuration used when updating ResourceClaim status.
+var Backoff = wait.Backoff{
+	Duration: 100 * time.Millisecond,
+	Factor:   2.0,
+	Jitter:   0.1,
+	Steps:    5,
+	Cap:      2 * time.Second,
+}

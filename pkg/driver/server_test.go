@@ -26,9 +26,13 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	resourceapi "k8s.io/api/resource/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
 
@@ -190,6 +194,39 @@ var _ = Describe("PrepareResourceClaims", func() {
 		})
 
 		It("calls UpdateStatus on the k8s client", func() {
+			Expect(hasUpdateStatusAction(client, "default")).To(BeTrue())
+		})
+	})
+
+	Context("when UpdateStatus returns a conflict on the first attempt", func() {
+		It("retries, re-fetches the claim, and eventually succeeds", func() {
+			claim := makeClaim("uid-conflict", "claim-conflict", "default")
+			_, _ = client.ResourceV1().ResourceClaims("default").Create(ctx, claim, metav1.CreateOptions{})
+
+			ds.EXPECT().PrepareResourceClaim(mock.Anything, mock.Anything).
+				Return(makePreparedDevices("uid-conflict", "claim-conflict", "default"), nil).Once()
+
+			// Inject a conflict error on the first UpdateStatus call only.
+			conflictErr := apierrors.NewConflict(
+				schema.GroupResource{Group: "resource.k8s.io", Resource: "resourceclaims"},
+				"claim-conflict",
+				errors.New("resource version mismatch"),
+			)
+			firstCall := true
+			client.PrependReactor("update", "resourceclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				if action.GetSubresource() != "status" {
+					return false, nil, nil
+				}
+				if firstCall {
+					firstCall = false
+					return true, nil, conflictErr
+				}
+				return false, nil, nil // let the default reactor handle subsequent calls
+			})
+
+			result, err := drv.PrepareResourceClaims(ctx, []*resourceapi.ResourceClaim{claim})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result[claim.UID].Err).To(BeNil())
 			Expect(hasUpdateStatusAction(client, "default")).To(BeTrue())
 		})
 	})
