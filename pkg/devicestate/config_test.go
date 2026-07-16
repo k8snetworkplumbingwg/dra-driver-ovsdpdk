@@ -173,6 +173,73 @@ var _ = Describe("parseClaimConfigs", func() {
 		Expect(got.Kind).To(Equal(ovsportv1alpha1.KindOvsPortConfig))
 	})
 
+	Describe("policing validation", func() {
+		validPolicingConfig := func(maxRate uint32) ovsportv1alpha1.OvsPortConfig {
+			cfg := validConfig()
+			cfg.Policing = &ovsportv1alpha1.OvsPolicing{MaxRate: new(maxRate)}
+			return cfg
+		}
+
+		It("accepts nil Policing (no policing configured)", func() {
+			cfg := validConfig()
+			entry := makeOpaqueClaimConfig(nil, cfg)
+			result, err := parseClaimConfigs([]resourceapi.DeviceAllocationConfiguration{entry})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.getConfig(request).Policing).To(BeNil())
+		})
+
+		It("accepts Policing with MaxRate only (Burst omitted)", func() {
+			entry := makeOpaqueClaimConfig(nil, validPolicingConfig(100000))
+			result, err := parseClaimConfigs([]resourceapi.DeviceAllocationConfiguration{entry})
+			Expect(err).NotTo(HaveOccurred())
+			got := result.getConfig(request)
+			Expect(got.Policing).NotTo(BeNil())
+			Expect(*got.Policing.MaxRate).To(Equal(uint32(100000)))
+			Expect(got.Policing.Burst).To(BeNil())
+		})
+
+		It("accepts Policing with both MaxRate and Burst set", func() {
+			cfg := validConfig()
+			cfg.Policing = &ovsportv1alpha1.OvsPolicing{
+				MaxRate: new(uint32(100000)),
+				Burst:   new(uint32(10000)),
+			}
+			entry := makeOpaqueClaimConfig(nil, cfg)
+			result, err := parseClaimConfigs([]resourceapi.DeviceAllocationConfiguration{entry})
+			Expect(err).NotTo(HaveOccurred())
+			got := result.getConfig(request)
+			Expect(*got.Policing.MaxRate).To(Equal(uint32(100000)))
+			Expect(*got.Policing.Burst).To(Equal(uint32(10000)))
+		})
+
+		It("accepts MaxRate = 0 (unlimited)", func() {
+			entry := makeOpaqueClaimConfig(nil, validPolicingConfig(0))
+			result, err := parseClaimConfigs([]resourceapi.DeviceAllocationConfiguration{entry})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*result.getConfig(request).Policing.MaxRate).To(Equal(uint32(0)))
+		})
+
+		It("accepts Burst = 0 (OVS default)", func() {
+			cfg := validConfig()
+			cfg.Policing = &ovsportv1alpha1.OvsPolicing{
+				MaxRate: new(uint32(100000)),
+				Burst:   new(uint32(0)),
+			}
+			entry := makeOpaqueClaimConfig(nil, cfg)
+			result, err := parseClaimConfigs([]resourceapi.DeviceAllocationConfiguration{entry})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*result.getConfig(request).Policing.Burst).To(Equal(uint32(0)))
+		})
+
+		It("returns an error when Policing is set but MaxRate is nil", func() {
+			cfg := validConfig()
+			cfg.Policing = &ovsportv1alpha1.OvsPolicing{} // MaxRate intentionally nil
+			entry := makeOpaqueClaimConfig(nil, cfg)
+			_, err := parseClaimConfigs([]resourceapi.DeviceAllocationConfiguration{entry})
+			Expect(err).To(MatchError(ContainSubstring("policing.max_rate is required")))
+		})
+	})
+
 	Describe("vlan validation", func() {
 		It("accepts a valid vlan", func() {
 			cfg := validConfig()

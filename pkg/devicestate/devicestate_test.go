@@ -511,6 +511,41 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		It("should pass QoS policing params to CreatePort", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+				mock.MatchedBy(func(p *ovs.OvsPortParams) bool {
+					return p.IngressRate == 1000 && p.IngressBurst == 256
+				}),
+			).Return(nil).Once()
+
+			portCfg := ovsportv1alpha1.OvsPortConfig{
+				Policing: &ovsportv1alpha1.OvsPolicing{
+					MaxRate: ptr.To(uint32(1000)),
+					Burst:   ptr.To(uint32(256)),
+				},
+			}
+			portCfg.APIVersion = ovsportv1alpha1.APIVersion
+			portCfg.Kind = ovsportv1alpha1.KindOvsPortConfig
+			raw, err := json.Marshal(portCfg)
+			Expect(err).NotTo(HaveOccurred())
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000061", "pod-uid-qos", "claim-qos", "vhost-qos", "br0")
+			claim.Status.Allocation.Devices.Config = []resourceapi.DeviceAllocationConfiguration{{
+				Source: resourceapi.AllocationConfigSourceClaim,
+				DeviceConfiguration: resourceapi.DeviceConfiguration{
+					Opaque: &resourceapi.OpaqueDeviceConfiguration{
+						Driver:     consts.DriverName,
+						Parameters: runtime.RawExtension{Raw: raw},
+					},
+				},
+			}}
+			_, err = ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("should roll back the socket directory when CreatePort fails", func(ctx SpecContext) {
 			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
 
