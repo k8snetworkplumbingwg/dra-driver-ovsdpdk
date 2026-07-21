@@ -48,6 +48,13 @@ spec:
                   description: BridgeSpec defines a single OVS bridge to be exposed
                     as a DRA device.
                   properties:
+                    mtu:
+                      description: |-
+                        Mtu is the MTU requested for every port created on this bridge.
+                        Valid range: 68 (RFC 791 minimum) to 65535.
+                      maximum: 65535
+                      minimum: 68
+                      type: integer
                     name:
                       description: Name is the name of the OVS bridge.
                       type: string

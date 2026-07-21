@@ -195,6 +195,41 @@ var _ = Describe("DeviceState", func() {
 			Expect(devices).To(HaveLen(1))
 			Expect(devices).To(HaveKey("br0"))
 		})
+
+		It("should succeed with a valid mtu on a bridge", func(ctx SpecContext) {
+			bridges := []ovsdpdkdrav1alpha1.BridgeSpec{{Name: "br0", Mtu: ptr.To(9000)}}
+			Expect(ds.UpdatePolicyDevices(ctx, bridges)).To(Succeed())
+		})
+
+		It("should return an error when mtu is below 68", func(ctx SpecContext) {
+			bridges := []ovsdpdkdrav1alpha1.BridgeSpec{{Name: "br0", Mtu: ptr.To(67)}}
+			Expect(ds.UpdatePolicyDevices(ctx, bridges)).To(
+				MatchError(ContainSubstring("mtu 67 out of range")),
+			)
+		})
+
+		It("should return an error when mtu is above 65535", func(ctx SpecContext) {
+			bridges := []ovsdpdkdrav1alpha1.BridgeSpec{{Name: "br0", Mtu: ptr.To(65536)}}
+			Expect(ds.UpdatePolicyDevices(ctx, bridges)).To(
+				MatchError(ContainSubstring("mtu 65536 out of range")),
+			)
+		})
+
+		It("should expose mtu as a device attribute when set", func(ctx SpecContext) {
+			bridges := []ovsdpdkdrav1alpha1.BridgeSpec{{Name: "br0", Mtu: ptr.To(9000)}}
+			Expect(ds.UpdatePolicyDevices(ctx, bridges)).To(Succeed())
+			attr, ok := ds.GetAllocatableDevices()["br0"].Attributes["ovsdpdk.k8snetworkplumbingwg.io/mtu"]
+			Expect(ok).To(BeTrue())
+			Expect(attr.IntValue).NotTo(BeNil())
+			Expect(*attr.IntValue).To(Equal(int64(9000)))
+		})
+
+		It("should not expose mtu as a device attribute when unset", func(ctx SpecContext) {
+			bridges := []ovsdpdkdrav1alpha1.BridgeSpec{{Name: "br0"}}
+			Expect(ds.UpdatePolicyDevices(ctx, bridges)).To(Succeed())
+			_, ok := ds.GetAllocatableDevices()["br0"].Attributes["ovsdpdk.k8snetworkplumbingwg.io/mtu"]
+			Expect(ok).To(BeFalse())
+		})
 	})
 
 	Describe("GetVhostUserConfig", func() {
@@ -506,7 +541,24 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 					return p.Vlan != nil && *p.Vlan == 500
 				}),
 			).Return(nil).Once()
+			_, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+		})
 
+		It("should pass bridge MTU to CreatePort params", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			Expect(ds.UpdatePolicyDevices(ctx, []ovsdpdkdrav1alpha1.BridgeSpec{
+				{Name: "br0", Mtu: ptr.To(9000)},
+			})).To(Succeed())
+
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+			mockOVS.EXPECT().CreatePort(mock.Anything, "br0", mock.Anything, mock.Anything,
+				mock.MatchedBy(func(p *ovs.OvsPortParams) bool {
+					return p.Mtu != nil && *p.Mtu == 9000
+				}),
+			).Return(nil).Once()
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000050", "pod-uid-mtu-ovs", "claim-mtu-ovs", "vhost-mtu-ovs", "br0")
 			_, err := ds.PrepareResourceClaim(ctx, claim)
 			Expect(err).NotTo(HaveOccurred())
 		})
@@ -659,6 +711,40 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			Expect(socketAttr.StringValue).NotTo(BeNil())
 			Expect(*socketAttr.StringValue).To(Equal(pd[0].Socket.ContainerPath))
 			Expect(*socketAttr.StringValue).To(HavePrefix(consts.DefaultContainerRootPath))
+		})
+
+		It("should include mtu in Device.Metadata when the bridge has Mtu set", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			Expect(ds.UpdatePolicyDevices(ctx, []ovsdpdkdrav1alpha1.BridgeSpec{
+				{Name: "br0", Mtu: ptr.To(9000)},
+			})).To(Succeed())
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000031", "pod-uid-mtu1", "claim-mtu1", "vhost-mtu1", "br0")
+			pd, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			mtuAttr, ok := pd[0].Device.Metadata.Attributes["mtu"]
+			Expect(ok).To(BeTrue())
+			Expect(mtuAttr.IntValue).NotTo(BeNil())
+			Expect(*mtuAttr.IntValue).To(Equal(int64(9000)))
+		})
+
+		It("should not include mtu in Device.Metadata when the bridge has no Mtu", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			Expect(ds.UpdatePolicyDevices(ctx, []ovsdpdkdrav1alpha1.BridgeSpec{
+				{Name: "br0"},
+			})).To(Succeed())
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000032", "pod-uid-mtu2", "claim-mtu2", "vhost-mtu2", "br0")
+			pd, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, ok := pd[0].Device.Metadata.Attributes["mtu"]
+			Expect(ok).To(BeFalse())
 		})
 	})
 })

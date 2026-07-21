@@ -301,4 +301,5 @@ The file is a JSON stream in the `metadata.resource.k8s.io/v1alpha1` format. It 
 | Attribute key | Value |
 |---|---|
 | `vhost-user-path` | Container-side path of the vhost-user socket |
+| `mtu` | Custom MTU value (Optional) |
 

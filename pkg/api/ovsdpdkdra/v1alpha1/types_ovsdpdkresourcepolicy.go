@@ -58,6 +58,13 @@ type BridgeSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`/`
 	TopologyResource string `json:"topologyResource,omitempty"`
+
+	// Mtu is the MTU requested for every port created on this bridge.
+	// Valid range: 68 (RFC 791 minimum) to 65535.
+	// +optional
+	// +kubebuilder:validation:Minimum=68
+	// +kubebuilder:validation:Maximum=65535
+	Mtu *int `json:"mtu,omitempty"`
 }
 
 // OvsDpdkResourcePolicyList contains a list of OvsDpdkResourcePolicy.
