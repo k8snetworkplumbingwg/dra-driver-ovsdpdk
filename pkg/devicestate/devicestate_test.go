@@ -67,7 +67,7 @@ var _ = Describe("DeviceState", func() {
 
 		It("should return a copy that does not affect internal state when modified", func() {
 			devices := ds.GetAllocatableDevices()
-			devices["injected"] = resourceapi.Device{}
+			devices["injected"] = devicestate.AllocatableDevice{}
 			Expect(ds.GetAllocatableDevices()).To(BeEmpty())
 		})
 	})

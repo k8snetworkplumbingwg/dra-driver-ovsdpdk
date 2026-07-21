@@ -46,8 +46,14 @@ import (
 	dratypes "github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/types"
 )
 
-// AllocatableDevices maps device names to their DRA device specifications.
-type AllocatableDevices map[string]resourceapi.Device
+// AllocatableDevice pairs a DRA device with its associated BridgeSpec.
+type AllocatableDevice struct {
+	resourceapi.Device
+	BridgeSpec ovsdpdkdrav1alpha1.BridgeSpec
+}
+
+// AllocatableDevices maps bridge names to their allocatable device state.
+type AllocatableDevices map[string]AllocatableDevice
 
 // DeviceState manages the set of vhost-user devices advertised by this node
 // and owns the prepare/unprepare lifecycle for resource claims.
@@ -386,28 +392,31 @@ func computeAllocatableDevices(bridges []ovsdpdkdrav1alpha1.BridgeSpec) Allocata
 	return devices
 }
 
-func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) resourceapi.Device {
+func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) AllocatableDevice {
 	one := resource.NewQuantity(1, resource.DecimalSI)
-	return resourceapi.Device{
-		Name:                     bridge.Name,
-		AllowMultipleAllocations: ptr.To(true),
-		Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
-			consts.DriverName + "/" + "bridgeName": {
-				StringValue: ptr.To(bridge.Name),
+	return AllocatableDevice{
+		Device: resourceapi.Device{
+			Name:                     bridge.Name,
+			AllowMultipleAllocations: ptr.To(true),
+			Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+				consts.DriverName + "/" + "bridgeName": {
+					StringValue: ptr.To(bridge.Name),
+				},
 			},
-		},
-		Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
-			consts.DriverName + "/" + "ports": {
-				Value: *resource.NewQuantity(consts.DefaultBridgeCapacity, resource.DecimalSI),
-				RequestPolicy: &resourceapi.CapacityRequestPolicy{
-					Default: one,
-					ValidRange: &resourceapi.CapacityRequestPolicyRange{
-						Min:  resource.NewQuantity(1, resource.DecimalSI),
-						Step: one,
+			Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
+				consts.DriverName + "/" + "ports": {
+					Value: *resource.NewQuantity(consts.DefaultBridgeCapacity, resource.DecimalSI),
+					RequestPolicy: &resourceapi.CapacityRequestPolicy{
+						Default: one,
+						ValidRange: &resourceapi.CapacityRequestPolicyRange{
+							Min:  resource.NewQuantity(1, resource.DecimalSI),
+							Step: one,
+						},
 					},
 				},
 			},
 		},
+		BridgeSpec: bridge,
 	}
 }
 
