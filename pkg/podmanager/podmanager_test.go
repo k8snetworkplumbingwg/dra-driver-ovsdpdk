@@ -39,7 +39,9 @@ var _ = Describe("PodManager", func() {
 	var pm *podmanager.PodManager
 
 	BeforeEach(func() {
-		pm = podmanager.New()
+		var err error
+		pm, err = podmanager.New(nil)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	Describe("Get", func() {
@@ -51,7 +53,7 @@ var _ = Describe("PodManager", func() {
 		It("should return the stored PreparedDevice and true for a known claim UID", func() {
 			uid := k8stypes.UID("uid-1")
 			pd := makePDs(uid, "claim-1")
-			pm.Set(uid, pd)
+			Expect(pm.Set(uid, pd)).To(Succeed())
 
 			got, found := pm.Get(uid)
 			Expect(found).To(BeTrue())
@@ -61,7 +63,7 @@ var _ = Describe("PodManager", func() {
 		It("should not remove the entry on Get", func() {
 			uid := k8stypes.UID("uid-2")
 			pd := makePDs(uid, "claim-2")
-			pm.Set(uid, pd)
+			Expect(pm.Set(uid, pd)).To(Succeed())
 
 			pm.Get(uid)
 			_, found := pm.Get(uid)
@@ -75,8 +77,8 @@ var _ = Describe("PodManager", func() {
 			pd1 := makePDs(uid, "first")
 			pd2 := makePDs(uid, "second")
 
-			pm.Set(uid, pd1)
-			pm.Set(uid, pd2)
+			Expect(pm.Set(uid, pd1)).To(Succeed())
+			Expect(pm.Set(uid, pd2)).To(Succeed())
 
 			got, found := pm.Get(uid)
 			Expect(found).To(BeTrue())
@@ -89,8 +91,8 @@ var _ = Describe("PodManager", func() {
 			pd1 := makePDs(uid1, "claim-a")
 			pd2 := makePDs(uid2, "claim-b")
 
-			pm.Set(uid1, pd1)
-			pm.Set(uid2, pd2)
+			Expect(pm.Set(uid1, pd1)).To(Succeed())
+			Expect(pm.Set(uid2, pd2)).To(Succeed())
 
 			got1, _ := pm.Get(uid1)
 			got2, _ := pm.Get(uid2)
@@ -107,7 +109,7 @@ var _ = Describe("PodManager", func() {
 		It("should return the PreparedDevice and remove it from the cache", func() {
 			uid := k8stypes.UID("uid-4")
 			pd := makePDs(uid, "to-delete")
-			pm.Set(uid, pd)
+			Expect(pm.Set(uid, pd)).To(Succeed())
 
 			got := pm.Delete(uid)
 			Expect(got).To(Equal(pd))
@@ -118,7 +120,7 @@ var _ = Describe("PodManager", func() {
 
 		It("should return nil on a second delete of the same UID", func() {
 			uid := k8stypes.UID("uid-5")
-			pm.Set(uid, makePDs(uid, "claim-5"))
+			Expect(pm.Set(uid, makePDs(uid, "claim-5"))).To(Succeed())
 			pm.Delete(uid)
 			Expect(pm.Delete(uid)).To(BeNil())
 		})
@@ -136,7 +138,7 @@ var _ = Describe("PodManager", func() {
 
 				go func() {
 					defer wg.Done()
-					pm.Set(uid, pd)
+					_ = pm.Set(uid, pd)
 				}()
 				go func() {
 					defer wg.Done()
@@ -154,11 +156,11 @@ var _ = Describe("PodManager", func() {
 			for i := range goroutines {
 				uid := k8stypes.UID("uid-del-" + string(rune('A'+i)))
 				pd := makePDs(uid, "claim-del")
-				pm.Set(uid, pd)
+				Expect(pm.Set(uid, pd)).To(Succeed())
 
 				go func() {
 					defer wg.Done()
-					pm.Set(uid, pd)
+					_ = pm.Set(uid, pd)
 				}()
 				go func() {
 					defer wg.Done()

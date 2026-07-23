@@ -50,10 +50,11 @@ func TestDriver(t *testing.T) {
 // kubelet plugin gRPC server. helper is intentionally left nil because
 // PrepareResourceClaims and UnprepareResourceClaims do not use it.
 func newTestDriver(ds *mocks.MockDeviceStateIface, client *fake.Clientset) *Driver {
+	pm, _ := podmanager.New(nil)
 	return &Driver{
 		log:         klog.Background(),
 		deviceState: ds,
-		podManager:  podmanager.New(),
+		podManager:  pm,
 		client:      client,
 	}
 }
