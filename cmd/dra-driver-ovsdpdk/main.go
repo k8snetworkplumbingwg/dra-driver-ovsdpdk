@@ -91,6 +91,13 @@ func newApp() *cli.App {
 			EnvVars:     []string{"CDI_ROOT"},
 		},
 		&cli.StringFlag{
+			Name:        "db-path",
+			Usage:       "Path to the persistent bbolt database file for checkpoint state. Set to empty string to disable persistence.",
+			Value:       "/var/run/ovsdpdk/ovsdpdk.db",
+			Destination: &f.DBPath,
+			EnvVars:     []string{"DB_PATH"},
+		},
+		&cli.StringFlag{
 			Name:        "kubelet-registrar-directory-path",
 			Usage:       "Absolute path to the directory where kubelet stores plugin registrations.",
 			Value:       defaultKubeletRegistrarDir,
@@ -232,6 +239,7 @@ func run(ctx context.Context, config *types.Config) error {
 		EnableDeviceMetadata: config.Flags.EnableDeviceMetadata,
 		PluginDataDir:        config.DriverPluginPath(),
 		CdiDir:               config.Flags.CdiRoot,
+		DBPath:               config.Flags.DBPath,
 	}
 	dvr, err := driver.New(ctx, devState, config.K8sClient, &driverConfig)
 	if err != nil {
