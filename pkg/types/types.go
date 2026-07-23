@@ -57,23 +57,23 @@ func (c *Config) DriverPluginPath() string {
 
 // MountInfo describes the vhost-user socket directory on both sides of the CDI mount.
 type MountInfo struct {
-	HostDir      string
-	ContainerDir string
+	HostDir      string `json:"hostDir"`
+	ContainerDir string `json:"containerDir"`
 }
 
 // SocketInfo describes the vhost-user socket path on both sides of the CDI mount.
 type SocketInfo struct {
-	HostPath      string
-	ContainerPath string
+	HostPath      string `json:"hostPath"`
+	ContainerPath string `json:"containerPath"`
 }
 
 // PreparedDevice is the unit of prepared state for a single ResourceClaim.
 type PreparedDevice struct {
-	Device              kubeletplugin.Device
-	ClaimNamespacedName kubeletplugin.NamespacedObject
-	BridgeName          string
-	OVSPortName         string // name of the OVS port/interface created for this device
-	Mount               MountInfo
-	Socket              SocketInfo
-	PortConfig          *ovsportv1alpha1.OvsPortConfig
+	Device              kubeletplugin.Device            `json:"device"`
+	ClaimNamespacedName kubeletplugin.NamespacedObject   `json:"claimNamespacedName"`
+	BridgeName          string                          `json:"bridgeName"`
+	OVSPortName         string                          `json:"ovsPortName"`
+	Mount               MountInfo                       `json:"mount"`
+	Socket              SocketInfo                      `json:"socket"`
+	PortConfig          *ovsportv1alpha1.OvsPortConfig   `json:"portConfig,omitempty"`
 }
