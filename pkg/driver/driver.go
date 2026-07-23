@@ -73,6 +73,9 @@ func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient 
 		}
 		return nil, fmt.Errorf("create pod manager: %w", err)
 	}
+	if n := pm.Len(); n > 0 {
+		logger.Info("Restored prepared claims from checkpoint", "count", n)
+	}
 
 	d := &Driver{
 		log:         logger,
