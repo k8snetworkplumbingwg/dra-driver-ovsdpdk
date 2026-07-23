@@ -34,6 +34,7 @@ type Flags struct {
 	Namespace                     string
 	ConfigName                    string
 	CdiRoot                       string
+	DBPath                        string
 	KubeletRegistrarDirectoryPath string
 	KubeletPluginsDirectoryPath   string
 	OVSRunDir                     string
