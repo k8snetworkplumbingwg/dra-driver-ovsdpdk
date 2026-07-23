@@ -101,3 +101,10 @@ func (pm *PodManager) Close() error {
 	}
 	return nil
 }
+
+// Len returns the number of claims in the store.
+func (pm *PodManager) Len() int {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	return len(pm.byClaimUID)
+}
