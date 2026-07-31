@@ -46,8 +46,14 @@ import (
 	dratypes "github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/types"
 )
 
-// AllocatableDevices maps device names to their DRA device specifications.
-type AllocatableDevices map[string]resourceapi.Device
+// AllocatableDevice pairs a DRA device with its associated BridgeSpec.
+type AllocatableDevice struct {
+	resourceapi.Device
+	BridgeSpec ovsdpdkdrav1alpha1.BridgeSpec
+}
+
+// AllocatableDevices maps bridge names to their allocatable device state.
+type AllocatableDevices map[string]AllocatableDevice
 
 // DeviceState manages the set of vhost-user devices advertised by this node
 // and owns the prepare/unprepare lifecycle for resource claims.
@@ -150,6 +156,9 @@ func (d *DeviceState) UpdatePolicyDevices(ctx context.Context, bridges []ovsdpdk
 			return fmt.Errorf("duplicate bridge name %q across OvsDpdkResourcePolicy objects", b.Name)
 		}
 		seen[b.Name] = struct{}{}
+		if b.Mtu != nil && (*b.Mtu < 68 || *b.Mtu > 65535) {
+			return fmt.Errorf("bridge %q: mtu %d out of range [68, 65535]", b.Name, *b.Mtu)
+		}
 	}
 
 	d.updateBridges(bridges)
@@ -231,7 +240,7 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 
 	hostSocketPath := filepath.Join(socketDir, consts.VhostSocketFilename)
 	portName := ovsPortName(claim.UID, result.Request)
-	params := ovsPortParams(claim, portConfig)
+	params := ovsPortParams(claim, portConfig, d.allocatable[result.Device].BridgeSpec)
 
 	logger.Info("creating OVS port", "name", portName, "socket", hostSocketPath, "params", params)
 	if err := d.ovsClient.CreatePort(ctx, result.Device, portName, hostSocketPath, params); err != nil {
@@ -250,9 +259,7 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 			DeviceName:   result.Device,
 			CDIDeviceIDs: []string{cdiDeviceID},
 			Metadata: &kubeletplugin.DeviceMetadata{
-				Attributes: map[string]resourceapi.DeviceAttribute{
-					"vhost-user-path": {StringValue: ptr.To(containerSocketPath)},
-				},
+				Attributes: deviceMetadataAttrs(containerSocketPath, params),
 			},
 		},
 		ClaimNamespacedName: kubeletplugin.NamespacedObject{
@@ -386,28 +393,37 @@ func computeAllocatableDevices(bridges []ovsdpdkdrav1alpha1.BridgeSpec) Allocata
 	return devices
 }
 
-func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) resourceapi.Device {
+func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) AllocatableDevice {
 	one := resource.NewQuantity(1, resource.DecimalSI)
-	return resourceapi.Device{
-		Name:                     bridge.Name,
-		AllowMultipleAllocations: ptr.To(true),
-		Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
-			consts.DriverName + "/" + "bridgeName": {
-				StringValue: ptr.To(bridge.Name),
-			},
+	attrs := map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+		consts.DriverName + "/" + "bridgeName": {
+			StringValue: ptr.To(bridge.Name),
 		},
-		Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
-			consts.DriverName + "/" + "ports": {
-				Value: *resource.NewQuantity(consts.DefaultBridgeCapacity, resource.DecimalSI),
-				RequestPolicy: &resourceapi.CapacityRequestPolicy{
-					Default: one,
-					ValidRange: &resourceapi.CapacityRequestPolicyRange{
-						Min:  resource.NewQuantity(1, resource.DecimalSI),
-						Step: one,
+	}
+	if bridge.Mtu != nil {
+		attrs[consts.DriverName+"/"+"mtu"] = resourceapi.DeviceAttribute{
+			IntValue: ptr.To(int64(*bridge.Mtu)),
+		}
+	}
+	return AllocatableDevice{
+		Device: resourceapi.Device{
+			Name:                     bridge.Name,
+			AllowMultipleAllocations: ptr.To(true),
+			Attributes:               attrs,
+			Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
+				consts.DriverName + "/" + "ports": {
+					Value: *resource.NewQuantity(consts.DefaultBridgeCapacity, resource.DecimalSI),
+					RequestPolicy: &resourceapi.CapacityRequestPolicy{
+						Default: one,
+						ValidRange: &resourceapi.CapacityRequestPolicyRange{
+							Min:  resource.NewQuantity(1, resource.DecimalSI),
+							Step: one,
+						},
 					},
 				},
 			},
 		},
+		BridgeSpec: bridge,
 	}
 }
 
@@ -418,9 +434,21 @@ func ovsPortName(claimUID k8stypes.UID, request string) string {
 	return uid[:8] + "-" + request
 }
 
+// deviceMetadataAttrs builds the DRA device metadata attributes for a prepared
+// device.
+func deviceMetadataAttrs(containerSocketPath string, params *ovs.OvsPortParams) map[string]resourceapi.DeviceAttribute {
+	attrs := map[string]resourceapi.DeviceAttribute{
+		"vhost-user-path": {StringValue: ptr.To(containerSocketPath)},
+	}
+	if params.Mtu != nil {
+		attrs["mtu"] = resourceapi.DeviceAttribute{IntValue: ptr.To(int64(*params.Mtu))}
+	}
+	return attrs
+}
+
 // ovsPortParams creates the port parameters for a request.
-func ovsPortParams(claim *resourceapi.ResourceClaim, portConfig *ovsportv1alpha1.OvsPortConfig) *ovs.OvsPortParams {
-	return &ovs.OvsPortParams{
+func ovsPortParams(claim *resourceapi.ResourceClaim, portConfig *ovsportv1alpha1.OvsPortConfig, bridge ovsdpdkdrav1alpha1.BridgeSpec) *ovs.OvsPortParams {
+	params := &ovs.OvsPortParams{
 		ExternalIDs: map[string]string{
 			"claim-uid":  string(claim.UID),
 			"claim-name": claim.Name,
@@ -428,7 +456,17 @@ func ovsPortParams(claim *resourceapi.ResourceClaim, portConfig *ovsportv1alpha1
 			"pod-name":   claim.Status.ReservedFor[0].Name,
 		},
 		Vlan: portConfig.Vlan,
+		Mtu:  bridge.Mtu,
 	}
+	if portConfig.Policing != nil {
+		if portConfig.Policing.MaxRate != nil {
+			params.IngressRate = int(*portConfig.Policing.MaxRate)
+		}
+		if portConfig.Policing.Burst != nil {
+			params.IngressBurst = int(*portConfig.Policing.Burst)
+		}
+	}
+	return params
 }
 
 // getPodClaimName returns the stable name of a claim in a Pod.

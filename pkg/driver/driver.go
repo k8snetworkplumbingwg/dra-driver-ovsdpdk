@@ -96,7 +96,7 @@ func (d *Driver) PublishResources(ctx context.Context) error {
 	allocatable := d.deviceState.GetAllocatableDevices()
 	devices := make([]resourceapi.Device, 0, len(allocatable))
 	for _, device := range allocatable {
-		devices = append(devices, device)
+		devices = append(devices, device.Device)
 	}
 
 	resources := resourceslice.DriverResources{
