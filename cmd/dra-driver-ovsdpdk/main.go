@@ -36,6 +36,7 @@ import (
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/controllers"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/devicestate"
+	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/dp"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/driver"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/flags"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/ovs"
@@ -218,6 +219,9 @@ func run(ctx context.Context, config *types.Config) error {
 		return fmt.Errorf("create DRI Handler: %w", err)
 	}
 
+	dpManager := dp.NewManager(ctx, ovsClient)
+	defer dpManager.StopAll()
+
 	devState := devicestate.New(cdiHandler, socketfs.New(), ovsClient)
 
 	driverConfig := driver.Config{
@@ -237,6 +241,8 @@ func run(ctx context.Context, config *types.Config) error {
 		config.Flags.NodeName,
 		config.Flags.Namespace,
 		devState,
+		ovsClient,
+		dpManager,
 	)
 	if err := reconciler.SetupWithManager(config.Manager); err != nil {
 		return fmt.Errorf("setup controller: %w", err)

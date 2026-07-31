@@ -420,7 +420,7 @@ func ovsPortName(claimUID k8stypes.UID, request string) string {
 
 // ovsPortParams creates the port parameters for a request.
 func ovsPortParams(claim *resourceapi.ResourceClaim, portConfig *ovsportv1alpha1.OvsPortConfig) *ovs.OvsPortParams {
-	return &ovs.OvsPortParams{
+	params := &ovs.OvsPortParams{
 		ExternalIDs: map[string]string{
 			"claim-uid":  string(claim.UID),
 			"claim-name": claim.Name,
@@ -429,6 +429,15 @@ func ovsPortParams(claim *resourceapi.ResourceClaim, portConfig *ovsportv1alpha1
 		},
 		Vlan: portConfig.Vlan,
 	}
+	if portConfig.Policing != nil {
+		if portConfig.Policing.MaxRate != nil {
+			params.IngressRate = int(*portConfig.Policing.MaxRate)
+		}
+		if portConfig.Policing.Burst != nil {
+			params.IngressBurst = int(*portConfig.Policing.Burst)
+		}
+	}
+	return params
 }
 
 // getPodClaimName returns the stable name of a claim in a Pod.

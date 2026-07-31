@@ -98,5 +98,10 @@ func validatePortConfig(config *ovsportv1alpha1.OvsPortConfig) error {
 	if config.Vlan != nil && (*config.Vlan < 0 || *config.Vlan > 4095) {
 		return fmt.Errorf("vlan %d out of range [0, 4095]", *config.Vlan)
 	}
+	if config.Policing != nil {
+		if config.Policing.MaxRate == nil {
+			return fmt.Errorf("policing.max_rate is required when policing is set")
+		}
+	}
 	return nil
 }
