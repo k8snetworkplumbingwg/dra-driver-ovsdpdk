@@ -50,6 +50,14 @@ type BridgeSpec struct {
 	// Name is the name of the OVS bridge.
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
+
+	// TopologyResource, if set, enables a Device Plugin that exposes the NUMA
+	// topology of this bridge's DPDK uplinks as a schedulable resource.
+	// The value must be a valid extended resource name in the form
+	// "domain/name" (e.g. "ovsdpdk.k8snetworkplumbingwg.io/topology-br0").
+	// +optional
+	// +kubebuilder:validation:Pattern=`/`
+	TopologyResource string `json:"topologyResource,omitempty"`
 }
 
 // OvsDpdkResourcePolicyList contains a list of OvsDpdkResourcePolicy.
