@@ -96,6 +96,9 @@ spec:
               apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
               kind: OvsPortConfig
               vlan: 100
+              policing:
+                max_rate: 100000
+                burst: 10000
 ```
 
 Field specification:
@@ -103,6 +106,8 @@ Field specification:
 | Field | Required | Description |
 |---|---|---|
 | `vlan` | no | VLAN ID to tag the OVS port (0–4095). Omit for an untagged port. |
+| `policing.max_rate` | yes (if `policing` is set) | Maximum ingress rate in kbps (`ingress_policing_rate`). 0 means unlimited. |
+| `policing.burst` | no | Maximum ingress burst size in kb (`ingress_policing_burst`). 0 or omitted means OVS default. |
 
 
 > The `kind` must be `OvsPortConfig` and `apiVersion` must be `ovsdpdk.k8snetworkplumbingwg.io/v1alpha1`; the driver rejects configs with mismatched values.
@@ -296,4 +301,5 @@ The file is a JSON stream in the `metadata.resource.k8s.io/v1alpha1` format. It 
 | Attribute key | Value |
 |---|---|
 | `vhost-user-path` | Container-side path of the vhost-user socket |
+| `mtu` | Custom MTU value (Optional) |
 

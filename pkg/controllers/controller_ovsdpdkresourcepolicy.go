@@ -29,12 +29,16 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	ovsdpdkdrav1alpha1 "github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/devicestate"
+	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/dp"
+	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/ovs"
 )
 
 const (
@@ -48,6 +52,8 @@ type OvsDpdkResourcePolicyReconciler struct {
 	namespace          string
 	log                klog.Logger
 	deviceStateManager *devicestate.DeviceState
+	ovsClient          ovs.Client
+	dpManager          *dp.Manager
 }
 
 // NewOvsDpdkResourcePolicyReconciler creates a new OvsDpdkResourcePolicyReconciler.
@@ -55,6 +61,8 @@ func NewOvsDpdkResourcePolicyReconciler(
 	c client.Client,
 	nodeName, namespace string,
 	deviceStateManager *devicestate.DeviceState,
+	ovsClient ovs.Client,
+	dpManager *dp.Manager,
 ) *OvsDpdkResourcePolicyReconciler {
 	return &OvsDpdkResourcePolicyReconciler{
 		Client:             c,
@@ -62,6 +70,8 @@ func NewOvsDpdkResourcePolicyReconciler(
 		namespace:          namespace,
 		log:                klog.Background().WithName("OvsDpdkResourcePolicyReconciler"),
 		deviceStateManager: deviceStateManager,
+		ovsClient:          ovsClient,
+		dpManager:          dpManager,
 	}
 }
 
@@ -103,11 +113,30 @@ func (r *OvsDpdkResourcePolicyReconciler) Reconcile(ctx context.Context, req ctr
 		bridges = append(bridges, policy.Spec.Bridges...)
 	}
 
-	r.log.Info("Reconciled policies", "matchingBridges", len(bridges))
+	// Filter out bridges that are not yet present in OVS.
+	activeBridges := make([]ovsdpdkdrav1alpha1.BridgeSpec, 0, len(bridges))
+	for _, b := range bridges {
+		present, err := r.ovsClient.BridgeExists(b.Name)
+		if err != nil {
+			r.log.Error(err, "Failed to retrieve bridges")
+			return ctrl.Result{}, err
+		}
+		if !present {
+			r.log.Info("Bridge not yet present in OVS, skipping", "bridge", b.Name)
+			continue
+		}
+		activeBridges = append(activeBridges, b)
+	}
 
-	if err := r.deviceStateManager.UpdatePolicyDevices(ctx, bridges); err != nil {
+	r.log.Info("Reconciled policies", "matchingBridges", len(activeBridges))
+
+	if err := r.deviceStateManager.UpdatePolicyDevices(ctx, activeBridges); err != nil {
 		r.log.Error(err, "Failed to update policy devices")
 		return ctrl.Result{}, err
+	}
+
+	if r.dpManager != nil {
+		r.dpManager.UpdateResources(ctx, activeBridges)
 	}
 
 	return ctrl.Result{}, nil
@@ -155,6 +184,22 @@ func (r *OvsDpdkResourcePolicyReconciler) SetupWithManager(mgr ctrl.Manager) err
 	nodeMetadata := &metav1.PartialObjectMetadata{}
 	nodeMetadata.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Node"))
 
+	triggerChan := make(chan event.GenericEvent, 1)
+
+	r.ovsClient.SetBridgeNotifier(func(ev ovs.BridgeEvent) {
+		select {
+		case triggerChan <- event.GenericEvent{
+			Object: &ovsdpdkdrav1alpha1.OvsDpdkResourcePolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourcePolicySyncEventName,
+					Namespace: r.namespace,
+				},
+			},
+		}:
+		default:
+		}
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("ovsdpdkresourcepolicy").
 		Watches(&ovsdpdkdrav1alpha1.OvsDpdkResourcePolicy{},
@@ -163,5 +208,6 @@ func (r *OvsDpdkResourcePolicyReconciler) SetupWithManager(mgr ctrl.Manager) err
 		Watches(nodeMetadata,
 			handler.EnqueueRequestsFromMapFunc(mapFn),
 			builder.WithPredicates(nodePredicate)).
+		WatchesRawSource(source.Channel(triggerChan, handler.EnqueueRequestsFromMapFunc(mapFn))).
 		Complete(r)
 }

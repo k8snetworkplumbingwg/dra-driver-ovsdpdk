@@ -36,6 +36,7 @@ import (
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/controllers"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/devicestate"
+	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/dp"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/driver"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/flags"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/ovs"
@@ -88,6 +89,13 @@ func newApp() *cli.App {
 			Value:       "/var/run/cdi",
 			Destination: &f.CdiRoot,
 			EnvVars:     []string{"CDI_ROOT"},
+		},
+		&cli.StringFlag{
+			Name:        "db-path",
+			Usage:       "Path to the persistent bbolt database file for checkpoint state. Set to empty string to disable persistence.",
+			Value:       "/var/run/ovsdpdk/ovsdpdk.db",
+			Destination: &f.DBPath,
+			EnvVars:     []string{"DB_PATH"},
 		},
 		&cli.StringFlag{
 			Name:        "kubelet-registrar-directory-path",
@@ -218,6 +226,9 @@ func run(ctx context.Context, config *types.Config) error {
 		return fmt.Errorf("create DRI Handler: %w", err)
 	}
 
+	dpManager := dp.NewManager(ctx, ovsClient)
+	defer dpManager.StopAll()
+
 	devState := devicestate.New(cdiHandler, socketfs.New(), ovsClient)
 
 	driverConfig := driver.Config{
@@ -225,6 +236,7 @@ func run(ctx context.Context, config *types.Config) error {
 		EnableDeviceMetadata: config.Flags.EnableDeviceMetadata,
 		PluginDataDir:        config.DriverPluginPath(),
 		CdiDir:               config.Flags.CdiRoot,
+		DBPath:               config.Flags.DBPath,
 	}
 	dvr, err := driver.New(ctx, devState, config.K8sClient, &driverConfig)
 	if err != nil {
@@ -237,6 +249,8 @@ func run(ctx context.Context, config *types.Config) error {
 		config.Flags.NodeName,
 		config.Flags.Namespace,
 		devState,
+		ovsClient,
+		dpManager,
 	)
 	if err := reconciler.SetupWithManager(config.Manager); err != nil {
 		return fmt.Errorf("setup controller: %w", err)

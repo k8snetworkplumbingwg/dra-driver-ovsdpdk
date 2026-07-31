@@ -30,6 +30,18 @@ const (
 	APIVersion = consts.GroupName + "/v1alpha1"
 )
 
+// OvsPolicing configures ingress policing on an OVS port.
+type OvsPolicing struct {
+	// MaxRate is the maximum ingress rate in kbps (ingress_policing_rate).
+	// Required. 0 means unlimited.
+	MaxRate *uint32 `json:"max_rate"`
+
+	// Burst is the maximum ingress burst size in kb (ingress_policing_burst).
+	// Optional. 0 or unset means OVS default.
+	// +optional
+	Burst *uint32 `json:"burst,omitempty"`
+}
+
 // OvsPortConfig is the opaque per-allocation configuration embedded in a
 // ResourceClaim. It carries user-specified values for OVS port properties.
 type OvsPortConfig struct {
@@ -39,6 +51,10 @@ type OvsPortConfig struct {
 	// When unset, the port is untagged.
 	// +optional
 	Vlan *int `json:"vlan,omitempty"`
+
+	// Policing configures ingress policing on the OVS port.
+	// +optional
+	Policing *OvsPolicing `json:"policing,omitempty"`
 }
 
 func DefaultOvsPortConfig() *OvsPortConfig {

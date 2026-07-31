@@ -16,6 +16,12 @@
 
 package consts
 
+import (
+	"time"
+
+	"k8s.io/apimachinery/pkg/util/wait"
+)
+
 const (
 	// DriverName is the name of the DRA driver as registered with Kubernetes.
 	DriverName = "ovsdpdk.k8snetworkplumbingwg.io"
@@ -29,6 +35,10 @@ const (
 	// DefaultBridgeCapacity is the default number of allocatable devices (ports) per bridge.
 	DefaultBridgeCapacity = 32 * 1024
 
+	// DefaultTopologyDeviceCount is the number of fake devices exposed by the
+	// topology Device Plugin for each bridge.
+	DefaultTopologyDeviceCount = 1024
+
 	// VhostSocketFilename is the name of the vhost-user socket file.
 	VhostSocketFilename = "vhost.sock"
 
@@ -38,3 +48,12 @@ const (
 	// DefaultContainerRootPath is the default vhost-user container base path.
 	DefaultContainerRootPath = "/var/run/ovsdpdk"
 )
+
+// Backoff is the retry configuration used when updating ResourceClaim status.
+var Backoff = wait.Backoff{
+	Duration: 100 * time.Millisecond,
+	Factor:   2.0,
+	Jitter:   0.1,
+	Steps:    5,
+	Cap:      2 * time.Second,
+}
