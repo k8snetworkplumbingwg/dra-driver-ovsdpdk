@@ -64,6 +64,8 @@ spec:
               mountPath: /var/lib/kubelet/plugins
             - name: kubelet-registry
               mountPath: /var/lib/kubelet/plugins_registry
+            - name: device-plugins
+              mountPath: /var/lib/kubelet/device-plugins
             - name: cdi-root
               mountPath: /var/run/cdi
             - name: socket-root
@@ -80,6 +82,10 @@ spec:
         - name: kubelet-registry
           hostPath:
             path: /var/lib/kubelet/plugins_registry
+            type: DirectoryOrCreate
+        - name: device-plugins
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
             type: DirectoryOrCreate
         - name: cdi-root
           hostPath:
