@@ -53,7 +53,9 @@ func (d *Driver) PrepareResourceClaims(ctx context.Context, claims []*resourceap
 			return result, err
 		}
 
-		d.podManager.Set(claim.UID, preparedDevices)
+		if err := d.podManager.Set(claim.UID, preparedDevices); err != nil {
+			logger.Error(err, "Failed to persist prepared devices", "claim", claim.UID)
+		}
 		result[claim.UID] = preparedDevicesToResult(preparedDevices)
 		d.updateClaimStatus(ctx, claim)
 		logger.V(1).Info("Prepared claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace, "result", preparedDevices)
@@ -118,7 +120,9 @@ func (d *Driver) UnprepareResourceClaims(ctx context.Context, claims []kubeletpl
 			logger.Error(err, "Failed to unprepare claim", "claim", claim.UID)
 			result[claim.UID] = fmt.Errorf("unprepare claim %s: %w", claim.UID, err)
 			// Reinsert perpared device in cache so that future retires can continue.
-			d.podManager.Set(claim.UID, pd)
+			if setErr := d.podManager.Set(claim.UID, pd); setErr != nil {
+				logger.Error(setErr, "Failed to re-persist prepared devices after unprepare failure", "claim", claim.UID)
+			}
 			continue
 		}
 

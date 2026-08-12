@@ -49,17 +49,39 @@ type Config struct {
 	EnableDeviceMetadata bool
 	PluginDataDir        string
 	CdiDir               string
+	DBPath               string
 }
 
 // New creates a new Driver and registers it with kubelet.
 func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient coreclientset.Interface, config *Config) (*Driver, error) {
 	logger := klog.FromContext(ctx).WithName("driver")
 
+	var cp podmanager.Checkpoint
+	if config.DBPath != "" {
+		var err error
+		cp, err = podmanager.NewBoltCheckpoint(config.DBPath)
+		if err != nil {
+			return nil, fmt.Errorf("open checkpoint database at %s: %w", config.DBPath, err)
+		}
+		logger.Info("Checkpoint persistence enabled", "dbPath", config.DBPath)
+	}
+
+	pm, err := podmanager.New(cp)
+	if err != nil {
+		if cp != nil {
+			_ = cp.Close()
+		}
+		return nil, fmt.Errorf("create pod manager: %w", err)
+	}
+	if n := pm.Len(); n > 0 {
+		logger.Info("Restored prepared claims from checkpoint", "count", n)
+	}
+
 	d := &Driver{
 		log:         logger,
 		nodeName:    config.NodeName,
 		deviceState: devState,
-		podManager:  podmanager.New(),
+		podManager:  pm,
 		client:      kubeClient,
 	}
 
@@ -79,6 +101,7 @@ func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient 
 
 	helper, err := kubeletplugin.Start(ctx, d, opts...)
 	if err != nil {
+		_ = pm.Close()
 		return nil, fmt.Errorf("start kubelet plugin: %w", err)
 	}
 
@@ -119,5 +142,8 @@ func (d *Driver) HandleError(ctx context.Context, err error, msg string) {
 
 // Stop shuts down the DRA driver and deregisters from kubelet.
 func (d *Driver) Stop() {
+	if err := d.podManager.Close(); err != nil {
+		d.log.Error(err, "Failed to close pod manager checkpoint")
+	}
 	d.helper.Stop()
 }
