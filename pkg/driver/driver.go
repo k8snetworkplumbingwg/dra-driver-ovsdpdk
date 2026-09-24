@@ -20,6 +20,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	resourceapi "k8s.io/api/resource/v1"
 	coreclientset "k8s.io/client-go/kubernetes"
@@ -28,9 +29,9 @@ import (
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/klog/v2"
 
+	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/claimstore"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/devicestate"
-	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/podmanager"
 )
 
 // Driver is the DRA kubelet plugin for OVS-DPDK vhost-user ports.
@@ -38,9 +39,11 @@ type Driver struct {
 	log         klog.Logger
 	nodeName    string
 	deviceState devicestate.DeviceStateIface
-	podManager  *podmanager.PodManager
+	claimStore  claimstore.PreparedClaimStore
 	helper      *kubeletplugin.Helper
 	client      coreclientset.Interface
+	// wg tracks in-flight PrepareResourceClaims / UnprepareResourceClaims
+	wg sync.WaitGroup
 }
 
 // Config encapsulates the Driver configuration.
@@ -49,17 +52,23 @@ type Config struct {
 	EnableDeviceMetadata bool
 	PluginDataDir        string
 	CdiDir               string
+	DBPath               string
 }
 
 // New creates a new Driver and registers it with kubelet.
 func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient coreclientset.Interface, config *Config) (*Driver, error) {
 	logger := klog.FromContext(ctx).WithName("driver")
 
+	cs, err := claimstore.New(config.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create PreparedClaimStore: %w", err)
+	}
+
 	d := &Driver{
 		log:         logger,
 		nodeName:    config.NodeName,
 		deviceState: devState,
-		podManager:  podmanager.New(),
+		claimStore:  cs,
 		client:      kubeClient,
 	}
 
@@ -79,6 +88,7 @@ func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient 
 
 	helper, err := kubeletplugin.Start(ctx, d, opts...)
 	if err != nil {
+		_ = cs.Close()
 		return nil, fmt.Errorf("start kubelet plugin: %w", err)
 	}
 
@@ -120,4 +130,13 @@ func (d *Driver) HandleError(ctx context.Context, err error, msg string) {
 // Stop shuts down the DRA driver and deregisters from kubelet.
 func (d *Driver) Stop() {
 	d.helper.Stop()
+
+	// kubeletplugin.Helper.Stop() will stop accepting new requests but
+	// in-flight operations are not aborted. Wait until all active
+	// PrepareResourceClaims / UnprepareResourceClaims handlers
+	// return, and only then close the claimStore.
+	d.wg.Wait()
+	if err := d.claimStore.Close(); err != nil {
+		d.log.Error(err, "Failed to close claim store")
+	}
 }

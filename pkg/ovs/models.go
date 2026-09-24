@@ -39,6 +39,7 @@ type Port struct {
 	Tag         *int              `ovsdb:"tag"`
 	Interfaces  []string          `ovsdb:"interfaces"`
 	ExternalIDs map[string]string `ovsdb:"external_ids"`
+	OtherConfig map[string]string `ovsdb:"other_config"`
 }
 
 // BridgeEventType indicates whether a bridge was added or deleted.

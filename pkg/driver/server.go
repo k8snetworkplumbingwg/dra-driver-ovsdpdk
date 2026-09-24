@@ -33,6 +33,8 @@ import (
 )
 
 func (d *Driver) PrepareResourceClaims(ctx context.Context, claims []*resourceapi.ResourceClaim) (map[k8stypes.UID]kubeletplugin.PrepareResult, error) {
+	d.wg.Add(1)
+	defer d.wg.Done()
 	logger := klog.FromContext(ctx).WithName("PrepareResourceClaims")
 	result := make(map[k8stypes.UID]kubeletplugin.PrepareResult, len(claims))
 
@@ -40,20 +42,32 @@ func (d *Driver) PrepareResourceClaims(ctx context.Context, claims []*resourceap
 		logger.V(1).Info("Preparing claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace)
 		logger.V(3).Info("Claim", "claim", claim)
 
-		if preparedDevices, found := d.podManager.Get(claim.UID); found {
+		preparedDevices, err := d.claimStore.Get(claim.UID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to access store: %w", err)
+		}
+		if len(preparedDevices) > 0 {
 			logger.V(1).Info("Claim already prepared, returning cached result", "claim", claim.UID)
 			result[claim.UID] = preparedDevicesToResult(preparedDevices)
 			continue
 		}
 
-		preparedDevices, err := d.deviceState.PrepareResourceClaim(ctx, claim)
+		preparedDevices, err = d.deviceState.PrepareResourceClaim(ctx, claim)
 		if err != nil {
 			logger.Error(err, "Failed to prepare claim", "claim", claim.UID)
 			result[claim.UID] = kubeletplugin.PrepareResult{Err: err}
 			return result, err
 		}
 
-		d.podManager.Set(claim.UID, preparedDevices)
+		if err := d.claimStore.Set(claim.UID, preparedDevices); err != nil {
+			logger.Error(err, "Failed to persist prepared devices; rolling back preparation", "claim", claim.UID)
+			if rbErr := d.deviceState.UnprepareResourceClaim(ctx, preparedDevices); rbErr != nil {
+				logger.Error(rbErr, "Rollback after checkpoint failure also failed", "claim", claim.UID)
+				err = fmt.Errorf("%w; rollback: %w", err, rbErr)
+			}
+			result[claim.UID] = kubeletplugin.PrepareResult{Err: err}
+			return result, err
+		}
 		result[claim.UID] = preparedDevicesToResult(preparedDevices)
 		d.updateClaimStatus(ctx, claim)
 		logger.V(1).Info("Prepared claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace, "result", preparedDevices)
@@ -101,15 +115,20 @@ func (d *Driver) updateClaimStatus(ctx context.Context, claim *resourceapi.Resou
 }
 
 func (d *Driver) UnprepareResourceClaims(ctx context.Context, claims []kubeletplugin.NamespacedObject) (map[k8stypes.UID]error, error) {
+	d.wg.Add(1)
+	defer d.wg.Done()
 	logger := klog.FromContext(ctx).WithName("UnprepareResourceClaims")
 	result := make(map[k8stypes.UID]error, len(claims))
 
 	for _, claim := range claims {
 		logger.V(1).Info("Unprepareing claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace)
 
-		pd := d.podManager.Delete(claim.UID)
-		if pd == nil {
-			logger.Info("Claim not found in pod manager, nothing to unprepare", "claim", claim.UID)
+		pd, err := d.claimStore.Get(claim.UID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to access store: %w", err)
+		}
+		if len(pd) == 0 {
+			logger.Info("Claim not found in store, nothing to unprepare", "claim", claim.UID)
 			result[claim.UID] = nil
 			continue
 		}
@@ -117,11 +136,12 @@ func (d *Driver) UnprepareResourceClaims(ctx context.Context, claims []kubeletpl
 		if err := d.deviceState.UnprepareResourceClaim(ctx, pd); err != nil {
 			logger.Error(err, "Failed to unprepare claim", "claim", claim.UID)
 			result[claim.UID] = fmt.Errorf("unprepare claim %s: %w", claim.UID, err)
-			// Reinsert perpared device in cache so that future retires can continue.
-			d.podManager.Set(claim.UID, pd)
 			continue
 		}
 
+		if err := d.claimStore.Delete(claim.UID); err != nil {
+			return nil, fmt.Errorf("failed to remove element from store: %w", err)
+		}
 		result[claim.UID] = nil
 		logger.V(1).Info("Unprepared claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace)
 	}

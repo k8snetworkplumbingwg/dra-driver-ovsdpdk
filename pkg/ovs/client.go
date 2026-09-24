@@ -438,6 +438,7 @@ func (c *ovsClient) CreatePort(ctx context.Context, bridgeName, portName, socket
 		Tag:         params.Vlan,
 		Interfaces:  []string{"newiface"},
 		ExternalIDs: params.ExternalIDs,
+		OtherConfig: map[string]string{"transient": "true"},
 	}
 	portOps, err := c.client.Create(port)
 	if err != nil {

@@ -52,6 +52,9 @@ const (
 	// DefaultContainerRootPath is the default vhost-user container base path.
 	DefaultContainerRootPath = "/var/run/ovsdpdk"
 
+	// DefaultDBPath is the default path for the claim store.
+	DefaultDBPath = "/var/run/ovsdpdk/ovsdpdk.db"
+
 	// DefaultMTU is the default MTU value used if the user did not specify a custom one.
 	DefaultMTU = 1500
 )

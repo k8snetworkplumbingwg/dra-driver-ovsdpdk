@@ -35,8 +35,8 @@ import (
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/controllers"
-	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/devicestate"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/deviceplugin"
+	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/devicestate"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/driver"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/flags"
 	"github.com/k8snetworkplumbingwg/dra-driver-ovsdpdk/pkg/ovs"
@@ -89,6 +89,13 @@ func newApp() *cli.App {
 			Value:       "/var/run/cdi",
 			Destination: &f.CdiRoot,
 			EnvVars:     []string{"CDI_ROOT"},
+		},
+		&cli.StringFlag{
+			Name:        "db-path",
+			Usage:       "Path to the persistent bbolt database file for checkpoint state.",
+			Value:       consts.DefaultDBPath,
+			Destination: &f.DBPath,
+			EnvVars:     []string{"DB_PATH"},
 		},
 		&cli.StringFlag{
 			Name:        "kubelet-registrar-directory-path",
@@ -232,6 +239,7 @@ func run(ctx context.Context, config *types.Config) error {
 		EnableDeviceMetadata: config.Flags.EnableDeviceMetadata,
 		PluginDataDir:        config.DriverPluginPath(),
 		CdiDir:               config.Flags.CdiRoot,
+		DBPath:               config.Flags.DBPath,
 	}
 	dvr, err := driver.New(ctx, devState, config.K8sClient, &driverConfig)
 	if err != nil {
