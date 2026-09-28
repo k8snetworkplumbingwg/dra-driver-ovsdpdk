@@ -82,6 +82,7 @@ func (d *Driver) updateClaimStatus(ctx context.Context, claim *resourceapi.Resou
 	// pointer swap on conflict. Other drivers' entries will be preserved from
 	// the refreshed claim.
 	ownedDevices := filterDevicesByDriver(claim.Status.Devices, consts.DriverName)
+	originalUID := claim.UID
 
 	err := wait.ExponentialBackoffWithContext(ctx, consts.Backoff, func(ctx context.Context) (bool, error) {
 		_, updateErr := d.client.ResourceV1().ResourceClaims(claim.Namespace).UpdateStatus(ctx, claim, metav1.UpdateOptions{})
@@ -98,6 +99,10 @@ func (d *Driver) updateClaimStatus(ctx context.Context, claim *resourceapi.Resou
 				}
 				d.log.V(2).Info("Failed to fetch fresh claim, will retry", "claimUID", claim.UID, "error", fetchErr)
 				return false, nil
+			}
+			if freshClaim.UID != originalUID {
+				return false, fmt.Errorf("claim %s/%s was replaced (UID changed from %s to %s): not updating status of replacement",
+					claim.Namespace, claim.Name, originalUID, freshClaim.UID)
 			}
 			// Merge our owned entries into the refreshed claim, preserving
 			// entries from other drivers.

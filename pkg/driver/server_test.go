@@ -394,6 +394,45 @@ var _ = Describe("PrepareResourceClaims", func() {
 		})
 	})
 
+	Context("when the claim is replaced under the same name during a conflict retry", func() {
+		It("stops retrying and does not write status to the replacement claim", func() {
+			originalUID := k8stypes.UID("uid-original")
+			replacementUID := k8stypes.UID("uid-replacement")
+
+			claim := makeClaim(string(originalUID), "claim-replaced", "default")
+			_, _ = client.ResourceV1().ResourceClaims("default").Create(ctx, claim, metav1.CreateOptions{})
+
+			prepared := makePreparedDevices(string(originalUID), "claim-replaced", "default")
+			cs.EXPECT().Get(claim.UID).Return(nil, nil).Once()
+			ds.EXPECT().PrepareResourceClaim(mock.Anything, mock.Anything).
+				Return(prepared, nil).Once()
+			cs.EXPECT().Set(claim.UID, prepared).Return(nil).Once()
+
+			conflictErr := apierrors.NewConflict(
+				schema.GroupResource{Group: "resource.k8s.io", Resource: "resourceclaims"},
+				"claim-replaced",
+				errors.New("resource version mismatch"),
+			)
+			updateCalls := 0
+			client.PrependReactor("update", "resourceclaims", updateStatusReactor(conflictErr, &updateCalls))
+
+			// The refetch returns a claim with a different UID — simulating a
+			// delete-and-recreate under the same name between our first
+			// UpdateStatus attempt and the Get.
+			getCalls := 0
+			client.PrependReactor("get", "resourceclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				getCalls++
+				replacement := makeClaim(string(replacementUID), "claim-replaced", "default")
+				return true, replacement, nil
+			})
+
+			_, _ = drv.PrepareResourceClaims(ctx, []*resourceapi.ResourceClaim{claim})
+
+			Expect(updateCalls).To(Equal(1), "must not attempt a second UpdateStatus on the replacement claim")
+			Expect(getCalls).To(Equal(1), "must attempt the refetch exactly once")
+		})
+	})
+
 	Context("when deviceState.PrepareResourceClaim returns an error", func() {
 		var (
 			claim       *resourceapi.ResourceClaim
