@@ -391,7 +391,7 @@ func updateClaimStatus(
 		return
 	}
 
-	claim.Status.Devices = append(claim.Status.Devices, resourceapi.AllocatedDeviceStatus{
+	claim.Status.Devices = upsertDeviceStatus(claim.Status.Devices, resourceapi.AllocatedDeviceStatus{
 		Driver:  allocResult.Driver,
 		Pool:    allocResult.Pool,
 		Device:  allocResult.Device,
