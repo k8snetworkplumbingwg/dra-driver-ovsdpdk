@@ -82,6 +82,7 @@ func (d *Driver) updateClaimStatus(ctx context.Context, claim *resourceapi.Resou
 	// pointer swap on conflict. Other drivers' entries will be preserved from
 	// the refreshed claim.
 	ownedDevices := filterDevicesByDriver(claim.Status.Devices, consts.DriverName)
+	originalUID := claim.UID
 
 	err := wait.ExponentialBackoffWithContext(ctx, consts.Backoff, func(ctx context.Context) (bool, error) {
 		_, updateErr := d.client.ResourceV1().ResourceClaims(claim.Namespace).UpdateStatus(ctx, claim, metav1.UpdateOptions{})
@@ -93,14 +94,23 @@ func (d *Driver) updateClaimStatus(ctx context.Context, claim *resourceapi.Resou
 			d.log.V(2).Info("Conflict updating claim status, refreshing claim", "claimUID", claim.UID)
 			freshClaim, fetchErr := d.client.ResourceV1().ResourceClaims(claim.Namespace).Get(ctx, claim.Name, metav1.GetOptions{})
 			if fetchErr != nil {
+				if isPermanentError(fetchErr) {
+					return false, fetchErr
+				}
 				d.log.V(2).Info("Failed to fetch fresh claim, will retry", "claimUID", claim.UID, "error", fetchErr)
 				return false, nil
+			}
+			if freshClaim.UID != originalUID {
+				return false, fmt.Errorf("claim %s/%s was replaced (UID changed from %s to %s): not updating status of replacement",
+					claim.Namespace, claim.Name, originalUID, freshClaim.UID)
 			}
 			// Merge our owned entries into the refreshed claim, preserving
 			// entries from other drivers.
 			freshClaim.Status.Devices = mergeDeviceStatus(freshClaim.Status.Devices, ownedDevices, consts.DriverName)
 			claim = freshClaim
 			d.log.V(2).Info("Refreshed claim, retrying status update", "claimUID", claim.UID)
+		} else if isPermanentError(updateErr) {
+			return false, updateErr
 		} else {
 			d.log.V(2).Info("Retrying claim status update", "claimUID", claim.UID, "error", updateErr)
 		}
@@ -182,4 +192,14 @@ func mergeDeviceStatus(target, owned []resourceapi.AllocatedDeviceStatus, driver
 		}
 	}
 	return append(merged, owned...)
+}
+
+// isPermanentError reports whether err is a terminal API error that will not
+// succeed on retry: NotFound, Forbidden, Invalid, or Unauthorized. Conflict
+// and transient errors are not permanent and should continue to be retried.
+func isPermanentError(err error) bool {
+	return apierrors.IsNotFound(err) ||
+		apierrors.IsForbidden(err) ||
+		apierrors.IsInvalid(err) ||
+		apierrors.IsUnauthorized(err)
 }

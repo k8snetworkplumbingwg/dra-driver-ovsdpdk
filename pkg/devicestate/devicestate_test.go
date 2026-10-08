@@ -885,6 +885,61 @@ var _ = Describe("DeviceState port config", func() {
 			_, err := ds.PrepareResourceClaim(ctx, claim)
 			Expect(err).To(MatchError(ContainSubstring("out of range")))
 		})
+
+		It("should produce distinct status entries for two requests sharing the same device but with different ShareIDs", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Times(2)
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Times(2)
+
+			claimUID := k8stypes.UID("abcdef12-0000-0000-0000-000000000051")
+			claim := makeClaim(claimUID, "pod-uid-share", "claim-share", "vhost-share", "br0")
+			// Replace the single result with two results for the same bridge,
+			// each distinguished by a different ShareID, as the allocator
+			// produces when consumable capacity is in use.
+			shareA := k8stypes.UID("share-a")
+			shareB := k8stypes.UID("share-b")
+			claim.Status.Allocation.Devices.Results = []resourceapi.DeviceRequestAllocationResult{
+				{Request: "req-0", Driver: consts.DriverName, Pool: "pool-0", Device: "br0", ShareID: &shareA},
+				{Request: "req-1", Driver: consts.DriverName, Pool: "pool-0", Device: "br0", ShareID: &shareB},
+			}
+
+			_, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Both shares must appear as separate entries; the second must not
+			// overwrite the first.
+			Expect(claim.Status.Devices).To(HaveLen(2),
+				"expected two distinct status entries for two different ShareIDs")
+		})
+
+		It("should not duplicate a device-status entry when the claim already carries a stale entry for our driver", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000050", "pod-uid-dup", "claim-dup", "vhost-dup", "br0")
+			// Seed a stale entry for our driver, as would be present after a
+			// driver restart where the claim was already prepared.
+			claim.Status.Devices = []resourceapi.AllocatedDeviceStatus{
+				{
+					Driver: consts.DriverName,
+					Pool:   "pool-0",
+					Device: "br0",
+				},
+			}
+
+			_, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			// The stale entry must be replaced in place, not appended to.
+			ownEntries := 0
+			for _, d := range claim.Status.Devices {
+				if d.Driver == consts.DriverName && d.Device == "br0" {
+					ownEntries++
+				}
+			}
+			Expect(ownEntries).To(Equal(1), "expected exactly one status entry for our driver's device, got %d", ownEntries)
+		})
 	})
 })
 

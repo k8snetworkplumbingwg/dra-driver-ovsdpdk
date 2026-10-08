@@ -123,6 +123,19 @@ func hasUpdateStatusAction(client *fake.Clientset, namespace string) bool {
 	return false
 }
 
+// updateStatusReactor returns a reactor that intercepts UpdateStatus calls on
+// resourceclaims, increments *calls, and returns err. Non-status updates are
+// passed through to the next reactor.
+func updateStatusReactor(err error, calls *int) k8stesting.ReactionFunc {
+	return func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetSubresource() != "status" {
+			return false, nil, nil
+		}
+		*calls++
+		return true, nil, err
+	}
+}
+
 var _ = Describe("PrepareResourceClaims", func() {
 	var (
 		ctx    context.Context
@@ -310,6 +323,113 @@ var _ = Describe("PrepareResourceClaims", func() {
 			}
 			Expect(foundOther).To(BeTrue(), "other driver's entry should be preserved")
 			Expect(foundOwn).To(BeTrue(), "our driver's entry should be present")
+		})
+	})
+
+	Context("when UpdateStatus returns a permanent error", func() {
+		DescribeTable("stops retrying and surfaces the real error",
+			func(makeErr func() error) {
+				claim := makeClaim("uid-perm", "claim-perm", "default")
+				_, _ = client.ResourceV1().ResourceClaims("default").Create(ctx, claim, metav1.CreateOptions{})
+
+				prepared := makePreparedDevices("uid-perm", "claim-perm", "default")
+				cs.EXPECT().Get(claim.UID).Return(nil, nil).Once()
+				ds.EXPECT().PrepareResourceClaim(mock.Anything, mock.Anything).
+					Return(prepared, nil).Once()
+				cs.EXPECT().Set(claim.UID, prepared).Return(nil).Once()
+
+				updateCalls := 0
+				client.PrependReactor("update", "resourceclaims", updateStatusReactor(makeErr(), &updateCalls))
+
+				_, _ = drv.PrepareResourceClaims(ctx, []*resourceapi.ResourceClaim{claim})
+
+				Expect(updateCalls).To(Equal(1), "permanent error must not be retried")
+			},
+			Entry("NotFound", func() error {
+				return apierrors.NewNotFound(schema.GroupResource{Group: "resource.k8s.io", Resource: "resourceclaims"}, "claim-perm")
+			}),
+			Entry("Forbidden", func() error {
+				return apierrors.NewForbidden(schema.GroupResource{Group: "resource.k8s.io", Resource: "resourceclaims"}, "claim-perm", errors.New("denied"))
+			}),
+			Entry("Invalid", func() error {
+				return apierrors.NewInvalid(schema.GroupKind{Group: "resource.k8s.io", Kind: "ResourceClaim"}, "claim-perm", nil)
+			}),
+		)
+	})
+
+	Context("when a conflict refetch returns a permanent error", func() {
+		It("stops retrying and does not attempt a second UpdateStatus", func() {
+			claim := makeClaim("uid-fetch-perm", "claim-fetch-perm", "default")
+			_, _ = client.ResourceV1().ResourceClaims("default").Create(ctx, claim, metav1.CreateOptions{})
+
+			prepared := makePreparedDevices("uid-fetch-perm", "claim-fetch-perm", "default")
+			cs.EXPECT().Get(claim.UID).Return(nil, nil).Once()
+			ds.EXPECT().PrepareResourceClaim(mock.Anything, mock.Anything).
+				Return(prepared, nil).Once()
+			cs.EXPECT().Set(claim.UID, prepared).Return(nil).Once()
+
+			conflictErr := apierrors.NewConflict(
+				schema.GroupResource{Group: "resource.k8s.io", Resource: "resourceclaims"},
+				"claim-fetch-perm",
+				errors.New("resource version mismatch"),
+			)
+			updateCalls := 0
+			client.PrependReactor("update", "resourceclaims", updateStatusReactor(conflictErr, &updateCalls))
+
+			// The refetch itself fails permanently (e.g. claim was deleted).
+			notFoundErr := apierrors.NewNotFound(
+				schema.GroupResource{Group: "resource.k8s.io", Resource: "resourceclaims"},
+				"claim-fetch-perm",
+			)
+			getCalls := 0
+			client.PrependReactor("get", "resourceclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				getCalls++
+				return true, nil, notFoundErr
+			})
+
+			_, _ = drv.PrepareResourceClaims(ctx, []*resourceapi.ResourceClaim{claim})
+
+			Expect(updateCalls).To(Equal(1), "must not retry after a permanent refetch error")
+			Expect(getCalls).To(Equal(1), "must attempt the refetch exactly once")
+		})
+	})
+
+	Context("when the claim is replaced under the same name during a conflict retry", func() {
+		It("stops retrying and does not write status to the replacement claim", func() {
+			originalUID := k8stypes.UID("uid-original")
+			replacementUID := k8stypes.UID("uid-replacement")
+
+			claim := makeClaim(string(originalUID), "claim-replaced", "default")
+			_, _ = client.ResourceV1().ResourceClaims("default").Create(ctx, claim, metav1.CreateOptions{})
+
+			prepared := makePreparedDevices(string(originalUID), "claim-replaced", "default")
+			cs.EXPECT().Get(claim.UID).Return(nil, nil).Once()
+			ds.EXPECT().PrepareResourceClaim(mock.Anything, mock.Anything).
+				Return(prepared, nil).Once()
+			cs.EXPECT().Set(claim.UID, prepared).Return(nil).Once()
+
+			conflictErr := apierrors.NewConflict(
+				schema.GroupResource{Group: "resource.k8s.io", Resource: "resourceclaims"},
+				"claim-replaced",
+				errors.New("resource version mismatch"),
+			)
+			updateCalls := 0
+			client.PrependReactor("update", "resourceclaims", updateStatusReactor(conflictErr, &updateCalls))
+
+			// The refetch returns a claim with a different UID — simulating a
+			// delete-and-recreate under the same name between our first
+			// UpdateStatus attempt and the Get.
+			getCalls := 0
+			client.PrependReactor("get", "resourceclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				getCalls++
+				replacement := makeClaim(string(replacementUID), "claim-replaced", "default")
+				return true, replacement, nil
+			})
+
+			_, _ = drv.PrepareResourceClaims(ctx, []*resourceapi.ResourceClaim{claim})
+
+			Expect(updateCalls).To(Equal(1), "must not attempt a second UpdateStatus on the replacement claim")
+			Expect(getCalls).To(Equal(1), "must attempt the refetch exactly once")
 		})
 	})
 
