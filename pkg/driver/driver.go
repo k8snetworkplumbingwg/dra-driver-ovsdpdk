@@ -23,8 +23,10 @@ import (
 	"sync"
 
 	resourceapi "k8s.io/api/resource/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	coreclientset "k8s.io/client-go/kubernetes"
 	metadatav1alpha1 "k8s.io/dynamic-resource-allocation/api/metadata/v1alpha1"
+	metadatav1beta1 "k8s.io/dynamic-resource-allocation/api/metadata/v1beta1"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/klog/v2"
@@ -72,19 +74,7 @@ func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient 
 		client:      kubeClient,
 	}
 
-	opts := []kubeletplugin.Option{
-		kubeletplugin.DriverName(consts.DriverName),
-		kubeletplugin.NodeName(config.NodeName),
-		kubeletplugin.KubeClient(kubeClient),
-		kubeletplugin.PluginDataDirectoryPath(config.PluginDataDir),
-	}
-	if config.EnableDeviceMetadata {
-		opts = append(opts,
-			kubeletplugin.EnableDeviceMetadata(true),
-			kubeletplugin.MetadataVersions(metadatav1alpha1.SchemeGroupVersion),
-			kubeletplugin.CDIDirectory(config.CdiDir),
-		)
-	}
+	opts := pluginOptions(config, kubeClient)
 
 	helper, err := kubeletplugin.Start(ctx, d, opts...)
 	if err != nil {
@@ -96,6 +86,28 @@ func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient 
 	d.deviceState.SetRepublishCallback(d.PublishResources)
 	d.log.Info("DRA driver started")
 	return d, nil
+}
+
+// pluginOptions configures the kubelet helper, including optional metadata output.
+func pluginOptions(config *Config, kubeClient coreclientset.Interface) []kubeletplugin.Option {
+	opts := []kubeletplugin.Option{
+		kubeletplugin.DriverName(consts.DriverName),
+		kubeletplugin.NodeName(config.NodeName),
+		kubeletplugin.KubeClient(kubeClient),
+		kubeletplugin.PluginDataDirectoryPath(config.PluginDataDir),
+	}
+	if config.EnableDeviceMetadata {
+		opts = append(opts,
+			// v1beta1 is required by the helper; retain v1alpha1 for older consumers.
+			kubeletplugin.EnableDeviceMetadata(true, []schema.GroupVersion{
+				metadatav1beta1.SchemeGroupVersion,
+				metadatav1alpha1.SchemeGroupVersion,
+			}),
+			kubeletplugin.CDIDirectory(config.CdiDir),
+		)
+	}
+
+	return opts
 }
 
 // PublishResources publishes the current set of allocatable devices as a
@@ -121,6 +133,13 @@ func (d *Driver) PublishResources(ctx context.Context) error {
 
 	logger.Info("Publishing resources", "devices", len(devices))
 	return d.helper.PublishResources(ctx, resources)
+}
+
+// WatchHealthStatus reports that this driver does not monitor device health.
+// The helper translates this sentinel into an Unimplemented response to kubelet.
+// TODO: Consider implementing device health monitoring in the future.
+func (d *Driver) WatchHealthStatus(_ context.Context, _ chan<- kubeletplugin.DeviceHealthReport) error {
+	return kubeletplugin.ErrHealthNotSupported
 }
 
 func (d *Driver) HandleError(ctx context.Context, err error, msg string) {
